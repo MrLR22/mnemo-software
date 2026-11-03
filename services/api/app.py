@@ -37,7 +37,8 @@ from pydantic import BaseModel
 
 from modules.storage import EventStore
 from query.llm_qa import answer, fmt_row, time_range
-from services.api.alerts import alerts as find_alerts
+from services.api.alerts import alerts as find_alerts, object_states
+from services.api.clips import ClipIndex
 from services.api.clients import RemoteDescriber, RemoteTrigger
 from services.api.pipeline import process_clip
 
@@ -116,6 +117,7 @@ def _worker():
                 job["step"] = msg
             with _lock:
                 job["result"] = process_clip(path, store(), describer(), trigger(), clip, recorded_at, progress)
+            ClipIndex(DB).add(job_id, job.get("file") or "video", job["result"])
             job["status"], job["step"] = "done", "done"
         except Exception as e:                           # the job fails, the backend keeps running
             job["status"], job["error"] = "failed", f"{type(e).__name__}: {e}"
@@ -165,13 +167,14 @@ def diary(day: str | None = None):
 
 class AskIn(BaseModel):
     question: str
+    at: str | None = None            # answer as of this time (replay: the moment the video is at)
 
 
 @app.post("/api/ask")
 def ask(req: AskIn):
     from search.engine import Searcher
     text, clip = search_models()
-    now = datetime.now()
+    now = datetime.fromisoformat(req.at) if req.at else datetime.now()
     with _lock:
         s = Searcher(store(), text=text, clip=clip) if text is not None else None
         r = answer(req.question, store(), llm=describer(), now=now, searcher=s)
@@ -183,6 +186,34 @@ def ask(req: AskIn):
                 moment = {"start": m["ts_start"].isoformat(timespec="seconds"), "end": m["ts_end"].isoformat(timespec="seconds"),
                           "what": "not described; the camera image matches" if m["row"].get("image_only") else fmt_row(m["row"]).split(" | ", 1)[1]}
     return {"answer": r["answer"], "moment": moment, "evidence": [_row(x) for x in r["lines"][:5]]}
+
+
+@app.get("/api/clips")
+def clips():
+    store()
+    return {"clips": ClipIndex(DB).all()}
+
+
+@app.get("/api/clips/{clip_id}/diary")
+def clip_diary(clip_id: str):
+    """The diary of one processed video, each line with offset_s = seconds into the video, and the object state
+    after each open / close / on / off (for alerts during the replay)."""
+    c = ClipIndex(DB).get(clip_id) if store() else None
+    if c is None:
+        raise HTTPException(404, "no such clip")
+    start = datetime.fromisoformat(c["start"])
+    with _lock:
+        rows = store().activities(start, start + timedelta(seconds=c["seconds"] + 5))
+    out = []
+    for r in rows:
+        if not r.get("verb"):
+            continue
+        st = object_states([r])
+        d = _row(r)
+        d["offset_s"] = round((r["ts_start"] - start).total_seconds(), 1)
+        d["state"] = [{"object": o.removesuffix(" power"), "state": s_} for o, (s_, _) in st.items()]
+        out.append(d)
+    return {"clip": c, "rows": out}
 
 
 @app.get("/api/alerts")

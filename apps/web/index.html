@@ -15,7 +15,32 @@
 
   <main>
     <section class="card">
-      <h2>Live</h2>
+      <h2>Demo replay</h2>
+      <p class="hint">A recorded first-person video, processed in advance by ENGRAM. While it plays, the diary and alerts
+        appear at the moment they happen, and questions are answered as of that moment. (Live recording is in development.)</p>
+      <div class="row">
+        <select id="clips"><option value="">No processed video yet: add one below (step 1)</option></select>
+        <label class="button small">Choose the same video file<input id="replayfile" type="file" accept="video/*" hidden></label>
+      </div>
+      <p id="replaystat" class="status"></p>
+      <video id="player" class="player" controls playsinline hidden></video>
+      <div class="grid" id="replayview" hidden>
+        <div>
+          <h3>Alerts now</h3>
+          <ul id="ralerts" class="list"><li class="empty">Nothing left open.</li></ul>
+          <h3>Ask (as of this moment in the video)</h3>
+          <form id="rask"><input id="rq" type="text" placeholder="Did I close the door?" autocomplete="off" required><button type="submit">Ask</button></form>
+          <div id="ranswer" class="answer" hidden></div>
+        </div>
+        <div>
+          <h3>Diary so far <span id="rcount" class="empty"></span></h3>
+          <ul id="rdiary" class="list"><li class="empty">Press play.</li></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Live <span class="empty">(in development)</span></h2>
       <p class="hint">Wear the phone on your chest, camera facing out. The diary is written while you record.</p>
       <video id="preview" class="preview" muted playsinline hidden></video>
       <button id="live">Start live</button>

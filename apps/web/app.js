@@ -44,8 +44,9 @@ async function watch(job) {
     const j = await api(`/api/jobs/${job}`);
     if (j.status === "done") {
       const r = j.result;
-      $("job").textContent = `Done: ${Math.round(r.video_seconds)} s of video, big model on ${r.big_model_calls} of ${r.windows} windows, ${r.rows} diary lines. Video deleted.`;
-      await Promise.all([loadDiary(), loadAlerts()]);
+      $("job").textContent = `Done: ${Math.round(r.video_seconds)} s of video, big model on ${r.big_model_calls} of ${r.windows} windows, ${r.rows} diary lines. Video deleted from the backend. Now pick it under "Demo replay".`;
+      await Promise.all([loadDiary(), loadAlerts(), loadClips()]);
+      $("clips").value = job; openReplay();
       return;
     }
     if (j.status === "failed") { $("job").textContent = `Failed: ${j.error}`; return; }
@@ -84,6 +85,74 @@ $("delete").addEventListener("click", async () => {
   if (!confirm("Delete the whole diary? This cannot be undone.")) return;
   await api("/api/diary", { method: "DELETE" });
   loadDiary(); loadAlerts();
+});
+
+// ── demo replay: a processed recording plays; the diary appears in sync with it ──
+const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+let replay = null;
+
+async function loadClips() {
+  const c = (await api("/api/clips")).clips;
+  if (!c.length) return;
+  $("clips").innerHTML = c.map((x) => `<option value="${esc(x.id)}">${esc(x.name)} · ${mmss(x.seconds)} · `
+    + `big model on ${x.described} of ${x.windows} windows · ${esc(x.created.replace("T", " "))}</option>`).join("");
+}
+
+async function openReplay() {
+  const id = $("clips").value;
+  if (!id) { replay = null; return; }
+  const d = await api(`/api/clips/${id}/diary`);
+  replay = { clip: d.clip, rows: d.rows, shown: -1, start: new Date(d.clip.start) };
+  $("replaystat").textContent = `${d.rows.length} diary lines for this video. Choose the same video file to play it.`;
+  renderReplay(0);
+}
+
+function renderReplay(t) {
+  if (!replay) return;
+  const upto = replay.rows.filter((r) => r.offset_s <= t);
+  if (upto.length === replay.shown) return;
+  const fresh = upto.length > replay.shown && replay.shown >= 0;
+  replay.shown = upto.length;
+  $("rcount").textContent = `(${upto.length} of ${replay.rows.length})`;
+  $("rdiary").innerHTML = upto.length
+    ? upto.slice().reverse().map((r, i) => `<li class="${fresh && i === 0 ? "new" : ""}"><span class="offset">${mmss(r.offset_s)}</span>`
+        + `${esc(r.verb)} ${esc(r.object)}${r.where ? ` <span class="empty">→ ${esc(r.where)}</span>` : ""}</li>`).join("")
+    : '<li class="empty">Nothing yet.</li>';
+  const state = {};
+  for (const r of upto) for (const x of r.state) state[x.object] = { state: x.state, at: r.offset_s };
+  const open = Object.entries(state).filter(([, v]) => v.state === "open" || v.state === "on");
+  $("ralerts").innerHTML = open.length
+    ? open.map(([o, v]) => `<li class="alert">The ${esc(o)} is ${v.state.toUpperCase()} since ${mmss(v.at)}</li>`).join("")
+    : '<li class="empty">Nothing left open.</li>';
+}
+
+$("clips").addEventListener("change", () => openReplay().catch((e) => { $("replaystat").textContent = e.message; }));
+$("replayfile").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const p = $("player");
+  p.src = URL.createObjectURL(f);                       // played from this device: the video is never uploaded again
+  p.hidden = false; $("replayview").hidden = false;
+  if (replay) replay.shown = -1;
+  renderReplay(0);
+});
+$("player").addEventListener("timeupdate", () => renderReplay($("player").currentTime));
+$("player").addEventListener("seeked", () => { if (replay) replay.shown = -1; renderReplay($("player").currentTime); });
+$("rask").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!replay) return;
+  const t = $("player").currentTime;
+  const at = new Date(replay.start.getTime() + t * 1000);
+  const iso = new Date(at.getTime() - at.getTimezoneOffset() * 60000).toISOString().slice(0, 19);   // local time
+  const box = $("ranswer");
+  box.hidden = false; box.textContent = `Thinking… (as of ${mmss(t)} in the video)`;
+  try {
+    const r = await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ question: $("rq").value, at: iso }) });
+    const off = (iso2) => mmss((new Date(iso2) - replay.start) / 1000);
+    box.innerHTML = `<div>${esc(r.answer)}</div><div class="moment">As of ${mmss(t)} in the video`
+      + (r.moment ? ` · best moment ${off(r.moment.start)}–${off(r.moment.end)}: ${esc(r.moment.what)}` : "") + "</div>";
+  } catch (err) { box.textContent = `Could not answer: ${err.message}`; }
 });
 
 // ── live: a new 4-s recording every 4 s, each sent as soon as it is finished ──
@@ -151,3 +220,4 @@ $("live").addEventListener("click", async () => {
 });
 
 health(); loadDiary().catch(() => {}); loadAlerts().catch(() => {});
+loadClips().then(() => openReplay()).catch(() => {});

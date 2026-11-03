@@ -38,7 +38,14 @@ The parts only talk over HTTP. The model wrappers, diary and search code come fr
 
 Without Kaggle: `FAKE=1 ./scripts/run_local.sh` (a fake big model, to try the apps).
 
-## Live mode (lag ≤ 45 s, never above 60 s)
+## Demo replay (recorded video)
+
+Add a recorded first-person video in step 1: it is processed without any lag limit (every window the small model
+flags is described), then deleted from the backend. Under **Demo replay**, pick it and choose the same file on the
+device: while it plays, diary lines and alerts appear at the moment they happen in the video, and questions are
+answered as of that moment (`/api/clips`, `/api/clips/{id}/diary`, `/api/ask` with `at`).
+
+## Live mode (lag ≤ 45 s, never above 60 s; in development)
 
 The web app's **Start live** button records a new 4-second piece every 4 seconds and sends each one at once; the
 diary is written while you record (`services/api/stream.py`).
@@ -68,10 +75,12 @@ token (it opens your diary: keep it private). Without it, the phone can still up
 | POST | `/api/clips` | upload a video (`file`, optional `recorded_at`) → job id |
 | GET | `/api/jobs/{id}` | progress / result of a clip |
 | GET | `/api/diary?day=YYYY-MM-DD` | the diary of a day |
-| POST | `/api/ask` | `{"question"}` → answer, best moment, evidence |
+| POST | `/api/ask` | `{"question", "at"?}` → answer, best moment, evidence (as of `at` if given) |
 | GET | `/api/alerts` | objects last seen open / on |
 | DELETE | `/api/diary` | delete the whole diary |
 | GET | `/api/health` | which parts are reachable |
+| GET | `/api/clips` | processed recordings (name, start, length, windows described) |
+| GET | `/api/clips/{id}/diary` | a recording's diary, each line with `offset_s` (seconds into the video) |
 | POST | `/api/live/start` | start a live session → session id |
 | POST | `/api/live/{sid}/piece` | one piece (`file`, `offset` = seconds since start) |
 | POST | `/api/live/{sid}/stop` | end of the session |
