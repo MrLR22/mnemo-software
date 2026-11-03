@@ -1,0 +1,8 @@
+# big model service (GPU machine)
+fastapi==0.120.0
+uvicorn==0.38.0
+transformers>=4.57
+accelerate
+torch
+opencv-python-headless
+numpy

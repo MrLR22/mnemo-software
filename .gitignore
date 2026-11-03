@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+database/*.db
+database/*.db-*
+uploads/
+*.mp4
+*.mov
