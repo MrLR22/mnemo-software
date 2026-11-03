@@ -15,13 +15,15 @@ class RemoteDescriber:
         self.url, self.timeout = url.rstrip("/"), timeout
         self.headers = {TOKEN_HEADER: token} if token else {}
 
-    def _post(self, path: str, body: dict) -> str:
-        r = requests.post(self.url + path, json=body, headers=self.headers, timeout=self.timeout)
+    def _post(self, path: str, body: dict, timeout: float | None = None) -> str:
+        r = requests.post(self.url + path, json=body, headers=self.headers, timeout=timeout or self.timeout)
         r.raise_for_status()
         return r.json()["text"]
 
-    def describe(self, frames_bgr: list[np.ndarray], seconds: float, check: list[str] | None = None) -> str:
-        return self._post("/describe", {"frames": encode_frames(frames_bgr), "seconds": seconds, "check": check})
+    def describe(self, frames_bgr: list[np.ndarray], seconds: float, check: list[str] | None = None,
+                 timeout: float | None = None) -> str:
+        """timeout: give up after this many seconds (live mode: the time left before the lag limit)."""
+        return self._post("/describe", {"frames": encode_frames(frames_bgr), "seconds": seconds, "check": check}, timeout)
 
     def chat(self, prompt: str, max_new_tokens: int = 300) -> str:
         return self._post("/chat", {"prompt": prompt, "max_new_tokens": max_new_tokens})

@@ -12,7 +12,7 @@ from fastapi import Header, HTTPException
 TOKEN_HEADER = "X-Engram-Token"
 
 
-def encode_frames(frames_bgr: list[np.ndarray], width: int = 448, quality: int = 85) -> list[str]:
+def encode_frames(frames_bgr: list[np.ndarray], width: int = 448, quality: int = 75) -> list[str]:
     """BGR frames → base64 JPEG strings, downscaled to `width` (the big model sees 448 px anyway)."""
     out = []
     for f in frames_bgr:

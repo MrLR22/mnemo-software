@@ -30,6 +30,26 @@ from modules.vlm_logger import ActionLogger
 from services.api.pipeline import normalise
 
 MAX_LAG_S = min(60.0, float(os.environ.get("ENGRAM_MAX_LAG_S", "45")))
+
+
+class _Deadline:
+    """Gives the big model call a hard deadline: a call that would end after the lag limit (a stuck connection,
+    a slow answer) is cancelled, so no window can ever be described later than the limit."""
+
+    def __init__(self, describer):
+        self.d, self.deadline = describer, None
+
+    def describe(self, frames, seconds, check=None):
+        left = None if self.deadline is None else self.deadline - time.time()
+        if left is not None and left <= 1.0:
+            raise TimeoutError("no time left before the lag limit")
+        try:
+            return self.d.describe(frames, seconds, check=check, timeout=left)
+        except TypeError:                                # a describer without a timeout (tests, in-process model)
+            return self.d.describe(frames, seconds, check=check) if check else self.d.describe(frames, seconds)
+
+    def chat(self, prompt, max_new_tokens=300):
+        return self.d.chat(prompt, max_new_tokens)
 W = C.VLM_WINDOW_S
 FPS = C.VLM_FRAMES / C.VLM_WINDOW_S                      # frames per second the big model needs (2)
 
@@ -37,7 +57,8 @@ FPS = C.VLM_FRAMES / C.VLM_WINDOW_S                      # frames per second the
 class StreamSession:
     def __init__(self, sid: str, db: str, describer, trigger=None, embedder=None, threshold: float = C.GATE_THRESHOLD,
                  max_lag_s: float = MAX_LAG_S, started_at: datetime | None = None):
-        self.sid, self.db, self.describer, self.trigger, self.embedder = sid, db, describer, trigger, embedder
+        self.sid, self.db, self.trigger, self.embedder = sid, db, trigger, embedder
+        self.describer = _Deadline(describer)
         self.threshold, self.max_lag_s = threshold, max_lag_s
         self.started = started_at or datetime.now()
         self.heartbeat = max(1, round(C.GATE_HEARTBEAT_S / W))
@@ -45,7 +66,8 @@ class StreamSession:
         self.windows: "queue.Queue[dict | None]" = queue.Queue()
         self.frames: dict[int, list[Frame]] = collections.defaultdict(list)
         self.last_t = 0.0
-        self.vlm_s = 7.0                                  # recent big-model seconds per window (updated live)
+        self.vlm_s = 10.0                                 # recent big-model seconds per window, incl. network (updated live)
+        self.recent_ok: collections.deque = collections.deque(maxlen=5)   # durations of the last described windows
         self.stats = {"pieces": 0, "windows": 0, "described": 0, "skipped_no_action": 0, "skipped_lag": 0,
                       "trigger_skipped_pieces": 0, "triggered": 0, "lag_s": [], "trigger_s": [], "big_model_s": [],
                       "errors": []}
@@ -133,20 +155,30 @@ class StreamSession:
             call.append(go)
             self.stats["windows"] += 1
             if len(frames) >= 2:
+                self.describer.deadline = end.timestamp() + self.max_lag_s
                 try:
                     n_rows = len(self.rows)
                     logger._window(frames, self.rows, False, np.array(call), None)
                     rec = logger.windows[-1]
                     if go:
                         self.vlm_s = 0.7 * self.vlm_s + 0.3 * rec["dt"]
+                        self.recent_ok.append(rec["dt"])
                         self.stats["big_model_s"].append(round(rec["dt"], 2))
                     for r in self.rows[n_rows:]:
                         r["ready_at"] = datetime.now()
-                except Exception as e:
-                    self.stats["errors"].append(f"window {k}: {type(e).__name__}: {e}")
-                    go = False
+                except Exception as e:                    # stuck / dropped call or the deadline: counts as a lag skip
+                    timeout = isinstance(e, TimeoutError) or "Timeout" in type(e).__name__
+                    if not timeout:
+                        self.stats["errors"].append(f"window {k}: {type(e).__name__}: {e}"[:200])
+                    go, late = False, True
+                    if len(logger.windows) == k:          # keep the window numbering
+                        logger.windows.append({"k": k, "t": k * W, "text": None, "called": False, "dt": 0.0})
+                finally:
+                    self.describer.deadline = None
             else:
                 logger.windows.append({"k": k, "t": k * W, "text": None, "called": False, "dt": 0.0})
+            if late and self.recent_ok:                   # recover after a slow spell: trust the usual speed again
+                self.vlm_s = max(float(np.median(self.recent_ok)), 0.85 * self.vlm_s)
             if go:
                 since = 1
                 self.stats["described"] += 1

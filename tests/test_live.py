@@ -89,3 +89,22 @@ def test_app_token(tmp_path, monkeypatch):
     assert c.get("/api/diary", headers={"X-Engram-Token": "tok"}).status_code == 200
     assert c.get("/api/diary?token=tok").status_code == 200
     assert c.get("/").status_code == 200                                 # the page holds no data
+
+
+class StuckDescriber(SlowDescriber):
+    """Like a dropped connection: answers only after 30 s, but honours the timeout it is given."""
+
+    def describe(self, frames, seconds, check=None, timeout=None):
+        self.calls += 1
+        if timeout is not None and timeout < 30:
+            time.sleep(timeout)
+            raise TimeoutError("read timed out")
+        time.sleep(30)
+        return "PLACE: kitchen"
+
+
+def test_a_stuck_call_is_cancelled_at_the_lag_limit(tmp_path):
+    t0 = time.time()
+    s, sm = _run(tmp_path, StuckDescriber(), started_at=datetime.now() - timedelta(seconds=4), n=1, max_lag_s=3.0)
+    assert sm["skipped_lag"] == 1 and sm["described"] == 0 and sm["errors"] == []
+    assert time.time() - t0 < 10                                         # cancelled at the limit, not after 30 s
