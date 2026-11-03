@@ -35,9 +35,16 @@ if [ "${HTTPS:-0}" = "1" ]; then
 fi
 if [ "${TUNNEL:-0}" = "1" ]; then
   [ -x bin/cloudflared ] || { echo "downloading cloudflared…"; curl -sL -o bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x bin/cloudflared; }
-  bin/cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate > bin/tunnel.log 2>&1 & TPID=$!; pids+=($TPID)
-  ( for _ in $(seq 1 45); do sleep 1; URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' bin/tunnel.log | head -1); [ -n "$URL" ] && break; done
-    if [ -n "$URL" ] && ! grep -q "hard_fail=true" bin/tunnel.log; then
+  # http2 over port 7844 TCP: QUIC (UDP) is blocked on many phone / college networks and only costs a 40-s timeout
+  bin/cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate --protocol http2 > bin/tunnel.log 2>&1 & TPID=$!; pids+=($TPID)
+  ( set +e                                         # grep finding nothing yet is not an error here
+    URL=""
+    for _ in $(seq 1 90); do
+      sleep 1
+      URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' bin/tunnel.log | head -1)
+      [ -n "$URL" ] && grep -q "Registered tunnel connection" bin/tunnel.log && break
+    done
+    if [ -n "$URL" ] && grep -q "Registered tunnel connection" bin/tunnel.log; then
       echo; echo "ENGRAM phone link (keep it private: it opens your diary):"; echo "  $URL/?token=${ENGRAM_APP_TOKEN}"; echo
     else
       echo; echo "TUNNEL FAILED: this network blocks Cloudflare tunnels (port 7844). Use HTTPS=1 instead."; echo
