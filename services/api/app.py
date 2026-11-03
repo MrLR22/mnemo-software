@@ -9,6 +9,11 @@
 #   GET    /api/alerts       → objects last seen open / on
 #   DELETE /api/diary        → deletes the whole diary and its search vectors
 #   GET    /api/health       → which services are reachable
+#   Live (services/api/stream.py; lag kept under ENGRAM_MAX_LAG_S, default 45 s):
+#   POST   /api/live/start                → {"session"}
+#   POST   /api/live/{sid}/piece          file=<piece> offset=<seconds since start> → {"queued"}
+#   POST   /api/live/{sid}/stop           → summary
+#   GET    /api/live/{sid}                → summary: lag (last / max / mean), described / skipped windows
 #   GET    /                 → the web app (apps/web)
 #
 # Settings (environment or .env): ENGRAM_VLM_URL + ENGRAM_VLM_TOKEN (big model service), ENGRAM_TRIGGER_URL and
@@ -41,6 +46,20 @@ WEB = os.path.join(ROOT, "apps", "web")
 DB = os.environ.get("ENGRAM_DB", os.path.join(ROOT, "database", "engram.db"))
 
 app = FastAPI(title="ENGRAM backend")
+
+
+@app.middleware("http")
+async def app_token(request, call_next):
+    """With ENGRAM_APP_TOKEN set (always when the backend is reachable from the internet), every /api/ request
+    needs it: header X-Engram-Token or ?token=. The page itself holds no data."""
+    from fastapi.responses import JSONResponse
+    want = os.environ.get("ENGRAM_APP_TOKEN", "")
+    if want and request.url.path.startswith("/api/"):
+        got = request.headers.get("X-Engram-Token") or request.query_params.get("token", "")
+        import hmac
+        if not hmac.compare_digest(got, want):
+            return JSONResponse({"detail": "wrong or missing app token"}, status_code=401)
+    return await call_next(request)
 _parts: dict = {}
 _lock = threading.Lock()                         # SQLite connection: one thread at a time
 jobs: dict[str, dict] = {}
@@ -178,6 +197,48 @@ def delete_diary():
     with _lock:
         store().clear_activities()
     return {"deleted": True}
+
+
+_live: dict = {}
+
+
+@app.post("/api/live/start")
+def live_start():
+    from services.api.stream import StreamSession
+    _, clip = search_models()
+    sid = uuid.uuid4().hex[:12]
+    store()                                          # creates the diary file and its tables
+    _live[sid] = StreamSession(sid, DB, describer(), trigger(), clip)
+    return {"session": sid, "max_lag_s": _live[sid].max_lag_s}
+
+
+def _session(sid: str):
+    if sid not in _live:
+        raise HTTPException(404, "no such live session")
+    return _live[sid]
+
+
+@app.post("/api/live/{sid}/piece")
+def live_piece(sid: str, file: UploadFile = File(...), offset: float = Form(...)):
+    s = _session(sid)
+    fd, path = tempfile.mkstemp(suffix=os.path.splitext(file.filename or "")[1] or ".webm", prefix="engram_live_")
+    with os.fdopen(fd, "wb") as out:
+        while chunk := file.file.read(1 << 20):
+            out.write(chunk)
+    s.add_piece(path, offset)
+    return {"queued": s.pieces.qsize()}
+
+
+@app.post("/api/live/{sid}/stop")
+def live_stop(sid: str):
+    s = _session(sid)
+    s.stop()
+    return s.summary()
+
+
+@app.get("/api/live/{sid}")
+def live_status(sid: str):
+    return _session(sid).summary()
 
 
 @app.get("/api/health")

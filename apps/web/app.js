@@ -3,7 +3,13 @@ const $ = (id) => document.getElementById(id);
 const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// App token (set when the backend is reachable from the internet): opened once as ...?token=XYZ, then remembered.
+const urlToken = new URLSearchParams(location.search).get("token");
+try { if (urlToken) localStorage.setItem("engram_token", urlToken); } catch (e) {}
+const TOKEN = urlToken || (() => { try { return localStorage.getItem("engram_token") || ""; } catch (e) { return ""; } })();
+
 async function api(path, options = {}) {
+  options.headers = Object.assign({}, options.headers || {}, TOKEN ? { "X-Engram-Token": TOKEN } : {});
   const r = await fetch(path, options);
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
   return r.json();
@@ -78,6 +84,70 @@ $("delete").addEventListener("click", async () => {
   if (!confirm("Delete the whole diary? This cannot be undone.")) return;
   await api("/api/diary", { method: "DELETE" });
   loadDiary(); loadAlerts();
+});
+
+// ── live: a new 4-s recording every 4 s, each sent as soon as it is finished ──
+const PIECE_MS = 4000;
+let live = null;
+
+function recorderType() {
+  for (const t of ["video/webm;codecs=vp8", "video/webm", "video/mp4"]) if (MediaRecorder.isTypeSupported(t)) return t;
+  return "";
+}
+
+function recordPiece() {
+  if (!live) return;
+  const offset = (performance.now() - live.t0) / 1000;
+  const type = recorderType();
+  const rec = new MediaRecorder(live.stream, type ? { mimeType: type, videoBitsPerSecond: 800000 } : {});
+  const parts = [];
+  rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+  rec.onstop = async () => {
+    const body = new FormData();
+    body.append("file", new Blob(parts, { type: rec.mimeType }), rec.mimeType.includes("mp4") ? "piece.mp4" : "piece.webm");
+    body.append("offset", offset.toFixed(2));
+    try { await api(`/api/live/${live.sid}/piece`, { method: "POST", body }); } catch (e) { $("livestat").textContent = `upload failed: ${e.message}`; }
+  };
+  rec.start();
+  setTimeout(() => { if (rec.state !== "inactive") rec.stop(); recordPiece(); }, PIECE_MS);
+}
+
+async function liveStatus() {
+  if (!live) return;
+  const s = await api(`/api/live/${live.sid}`);
+  const lag = s.lag_last_s == null ? "–" : `${Math.round(s.lag_last_s)} s`;
+  const cls = s.lag_last_s != null && s.lag_last_s > s.max_lag_limit_s * 0.8 ? "lag-warn" : "lag-ok";
+  $("livestat").innerHTML = `<span class="${cls}">lag ${lag}</span> (max ${s.lag_max_s ?? "–"} s, limit ${s.max_lag_limit_s} s) · `
+    + `described ${s.described} · nothing happening ${s.skipped_no_action} · skipped to keep the lag ${s.skipped_lag}`;
+  $("liverecent").innerHTML = s.recent.slice().reverse().map((r) => `<li><span class="time">${time(r.start)}</span>${esc(r.verb)} ${esc(r.object)}</li>`).join("");
+}
+
+$("live").addEventListener("click", async () => {
+  if (live) {                                            // stop
+    const sid = live.sid;
+    live.stream.getTracks().forEach((t) => t.stop());
+    clearInterval(live.poll);
+    live = null;
+    $("live").textContent = "Start live";
+    $("preview").hidden = true;
+    await api(`/api/live/${sid}/stop`, { method: "POST" });
+    setTimeout(() => { loadDiary(); loadAlerts(); }, 3000);
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    $("livestat").textContent = "This browser cannot record here (on a phone: open the https link the backend printed).";
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    const { session } = await api("/api/live/start", { method: "POST" });
+    live = { sid: session, stream, t0: performance.now() };
+    $("preview").srcObject = stream; $("preview").hidden = false; $("preview").play();
+    $("live").textContent = "Stop live";
+    $("livestat").textContent = "recording…";
+    recordPiece();
+    live.poll = setInterval(() => { liveStatus().catch(() => {}); loadDiary().catch(() => {}); loadAlerts().catch(() => {}); }, 3000);
+  } catch (e) { $("livestat").textContent = `Could not start the camera: ${e.message}`; }
 });
 
 health(); loadDiary().catch(() => {}); loadAlerts().catch(() => {});

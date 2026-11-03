@@ -31,6 +31,7 @@ class FakeDescriber:
     """No GPU: always the same plausible answer (for tests and for trying the apps)."""
 
     def describe(self, frames, seconds, check=None):
+        time.sleep(float(os.environ.get("ENGRAM_VLM_FAKE_DELAY", "0")))   # e.g. 6.6 = Qwen3-VL-4B on a T4
         return "PLACE: kitchen\nSTATE: fridge = closed\nDID: picks up | cup | counter"
 
     def chat(self, prompt, max_new_tokens=300):

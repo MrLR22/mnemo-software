@@ -44,5 +44,17 @@ class RemoteTrigger:
         d = r.json()
         return np.array(d["scores"], float), np.array(d["call"], bool), d["stats"]
 
+    def piece(self, sid: str, video_path: str, offset_s: float) -> list[dict]:
+        """Live: one piece of video → the windows that are now complete, [{"k", "score"}]."""
+        with open(video_path, "rb") as f:
+            r = requests.post(f"{self.url}/session/{sid}/piece", files={"file": ("piece.mp4", f, "video/mp4")},
+                              data={"offset": str(offset_s)}, timeout=60)
+        r.raise_for_status()
+        return r.json()["windows"]
+
+    def finish(self, sid: str) -> list[dict]:
+        r = requests.post(f"{self.url}/session/{sid}/finish", timeout=60)
+        return r.json()["windows"] if r.ok else []
+
     def health(self) -> dict:
         return requests.get(self.url + "/health", timeout=10).json()

@@ -38,6 +38,29 @@ The parts only talk over HTTP. The model wrappers, diary and search code come fr
 
 Without Kaggle: `FAKE=1 ./scripts/run_local.sh` (a fake big model, to try the apps).
 
+## Live mode (lag ≤ 45 s, never above 60 s)
+
+The web app's **Start live** button records a new 4-second piece every 4 seconds and sends each one at once; the
+diary is written while you record (`services/api/stream.py`).
+
+- **Small model** keeps its state across pieces (`services/trigger/session.py`); hands and objects run in parallel.
+- **Lag guard:** a window the big model could not finish within `ENGRAM_MAX_LAG_S` (45 s) is skipped by the big
+  model (its image fingerprint is still kept). **Trigger guard:** if pieces pile up, the small model skips one.
+  So when a part is too slow, fewer windows are described instead of the lag growing.
+
+Measured on the laptop (live simulation `scripts/simulate_live.py`, 169 s of real video, big model faked at
+Qwen3-VL-4B's speed on a T4, 6.6 s per window):
+
+| Case | Lag mean | Lag max | Windows skipped by the lag guard |
+|---|---|---|---|
+| normal (trigger on, 38% of windows described) | 14.6 s | 19.4 s | 0 of 42 |
+| worst case (every window sent to the big model) | 36.5 s | 45.1 s | 13 of 42 |
+
+Small model: 2.3 s per 4-s piece on the laptop CPU (320-px object detection, `ENGRAM_YOLO_IMGSZ`).
+
+**Phone camera in live mode needs https:** `TUNNEL=1 ./scripts/run_local.sh` prints a private https link with an app
+token (it opens your diary: keep it private). Without it, the phone can still upload recorded clips over Wi-Fi.
+
 ## Backend API
 
 | Method | Path | What |
@@ -49,3 +72,9 @@ Without Kaggle: `FAKE=1 ./scripts/run_local.sh` (a fake big model, to try the ap
 | GET | `/api/alerts` | objects last seen open / on |
 | DELETE | `/api/diary` | delete the whole diary |
 | GET | `/api/health` | which parts are reachable |
+| POST | `/api/live/start` | start a live session → session id |
+| POST | `/api/live/{sid}/piece` | one piece (`file`, `offset` = seconds since start) |
+| POST | `/api/live/{sid}/stop` | end of the session |
+| GET | `/api/live/{sid}` | lag (last / max / mean), described and skipped windows, recent diary lines |
+
+With `ENGRAM_APP_TOKEN` set, every `/api/` call needs header `X-Engram-Token` (or `?token=`).

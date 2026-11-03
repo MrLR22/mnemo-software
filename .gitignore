@@ -6,3 +6,4 @@ database/*.db-*
 uploads/
 *.mp4
 *.mov
+bin/
