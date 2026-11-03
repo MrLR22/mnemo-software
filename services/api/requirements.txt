@@ -1,0 +1,9 @@
+# backend (CPU); also needs the research code (../mnemo, see services/__init__.py)
+fastapi==0.120.0
+uvicorn==0.38.0
+python-multipart==0.0.20
+requests
+numpy
+opencv-contrib-python==5.0.0.93
+open_clip_torch==3.3.0          # image fingerprints for search
+sentence-transformers==5.1.1    # meaning search

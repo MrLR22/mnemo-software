@@ -1,0 +1,29 @@
+:root { --bg: #f6f5f2; --card: #ffffff; --ink: #1d1c1a; --muted: #6b6862; --line: #e3e0da;
+        --accent: #2f5d50; --warn: #a0461f; --ok: #2f6b3a; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161615; --card: #201f1d; --ink: #ecebe7; --muted: #a29e96; --line: #33312d;
+          --accent: #7fb8a4; --warn: #e48b5f; --ok: #8fc79a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.45 system-ui, -apple-system, sans-serif; }
+header, main { max-width: 720px; margin: 0 auto; padding: 16px; }
+h1 { margin: 8px 0 0; font-size: 1.6rem; letter-spacing: .04em; }
+h2 { margin: 0 0 8px; font-size: 1.05rem; display: flex; align-items: center; gap: 8px; }
+.sub, .hint, .health { color: var(--muted); margin: 4px 0; font-size: .9rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+.button, button { display: inline-block; background: var(--accent); color: var(--bg); border: 0; border-radius: 8px;
+                  padding: 10px 14px; font: inherit; cursor: pointer; }
+button.small { padding: 4px 10px; font-size: .85rem; }
+button.danger { background: transparent; color: var(--warn); border: 1px solid var(--warn); margin-top: 8px; }
+form { display: flex; gap: 8px; }
+input[type=text] { flex: 1; min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+                   background: var(--bg); color: var(--ink); font: inherit; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: .92rem; overflow-wrap: anywhere; }
+.list li:last-child { border-bottom: 0; }
+.empty { color: var(--muted); }
+.time { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 8px; }
+.alert { color: var(--warn); }
+.status { margin: 8px 0 0; font-size: .92rem; }
+.answer { margin-top: 12px; padding: 12px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: 6px; }
+.answer .moment, .answer .evidence { color: var(--muted); font-size: .88rem; margin-top: 6px; }

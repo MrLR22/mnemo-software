@@ -1,0 +1,9 @@
+# small model service (CPU is enough); also needs the research code (../mnemo, see services/__init__.py)
+fastapi==0.120.0
+uvicorn==0.38.0
+python-multipart==0.0.20
+torch
+mediapipe==1.1.0
+ultralytics==8.4.175
+opencv-contrib-python==5.0.0.93
+numpy

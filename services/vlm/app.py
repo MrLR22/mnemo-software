@@ -15,10 +15,11 @@
 import os
 import time
 
-from fastapi import Depends, FastAPI
-from pydantic import BaseModel
+import services  # noqa: F401  (puts the research code on the path)
 
 import config as C
+from fastapi import Depends, FastAPI
+from pydantic import BaseModel
 from services.common import decode_frames, require_token
 
 app = FastAPI(title="ENGRAM big model service")

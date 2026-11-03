@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ENGRAM</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>ENGRAM</h1>
+    <p class="sub">Your reference diary. No video is kept.</p>
+    <p id="health" class="health">checking services…</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>1. Add a clip</h2>
+      <p class="hint">On a phone: tap the button and record with the camera on your chest. On a laptop: pick a video file.</p>
+      <label class="button">
+        Record / choose video
+        <input id="file" type="file" accept="video/*" capture="environment" hidden>
+      </label>
+      <p id="job" class="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>2. Alerts</h2>
+      <ul id="alerts" class="list"><li class="empty">Nothing left open.</li></ul>
+    </section>
+
+    <section class="card">
+      <h2>3. Ask</h2>
+      <form id="ask">
+        <input id="question" type="text" placeholder="Did I close the fridge?" autocomplete="off" required>
+        <button type="submit">Ask</button>
+      </form>
+      <div id="answer" class="answer" hidden></div>
+    </section>
+
+    <section class="card">
+      <h2>Today's diary <button id="refresh" class="small">refresh</button></h2>
+      <ul id="diary" class="list"><li class="empty">No entries yet.</li></ul>
+      <button id="delete" class="danger small">Delete my whole diary</button>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
