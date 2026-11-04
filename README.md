@@ -38,10 +38,12 @@ The parts only talk over HTTP. The model wrappers, diary and search code come fr
 
 Without Kaggle: `FAKE=1 ./scripts/run_local.sh` (a fake big model, to try the apps).
 
-## Demo replay (recorded video)
+## Demo replay (recorded video, any length)
 
-Add a recorded first-person video in step 1: it is processed without any lag limit (every window the small model
-flags is described), then deleted from the backend. Under **Demo replay**, pick it and choose the same file on the
+Add a recorded first-person video in step 1. It is processed **piece by piece** (20-s pieces, the same chain as live
+mode, `services/api/progressive.py`) without any lag limit (every window the small model flags is described), then
+deleted from the backend. It is listed under **Demo replay** at once: while it is still processing, the app shows
+"processed up to mm:ss" and questions are answered about the processed part. Under **Demo replay**, pick it and choose the same file on the
 device: while it plays, diary lines and alerts appear at the moment they happen in the video, and questions are
 answered as of that moment (`/api/clips`, `/api/clips/{id}/diary`, `/api/ask` with `at`).
 

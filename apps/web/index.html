@@ -23,12 +23,13 @@
         <label class="button small">Choose the same video file<input id="replayfile" type="file" accept="video/*" hidden></label>
       </div>
       <p id="replaystat" class="status"></p>
+      <div id="procbar" class="procbar" hidden><div id="procfill"></div></div>
       <video id="player" class="player" controls playsinline hidden></video>
       <div class="grid" id="replayview" hidden>
         <div>
           <h3>Alerts now</h3>
           <ul id="ralerts" class="list"><li class="empty">Nothing left open.</li></ul>
-          <h3>Ask (as of this moment in the video)</h3>
+          <h3 id="askhead">Ask about the processed part</h3>
           <form id="rask"><input id="rq" type="text" placeholder="Did I close the door?" autocomplete="off" required><button type="submit">Ask</button></form>
           <div id="ranswer" class="answer" hidden></div>
         </div>

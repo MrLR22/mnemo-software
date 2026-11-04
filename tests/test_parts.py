@@ -97,3 +97,42 @@ def test_replay_diary_with_offsets_and_ask_as_of(tmp_path, monkeypatch):
     late = c.post("/api/ask", json={"question": "did I close the fridge?", "at": "2026-11-04T09:00:09"}).json()
     assert all("closes" not in e["verb"] for e in early["evidence"])           # as of 0:03 the closing has not happened
     assert any(e["verb"] == "closes" for e in late["evidence"])
+
+
+def test_long_video_is_answerable_while_processing(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENGRAM_DB", str(tmp_path / "p.db"))
+    monkeypatch.setenv("ENGRAM_SEARCH", "keyword")
+    monkeypatch.setenv("ENGRAM_USE_TRIGGER", "0")
+    monkeypatch.setenv("ENGRAM_VLM_URL", "http://unused")
+    import importlib
+    import time
+    import services.api.app as api
+    importlib.reload(api)
+
+    class Slow:
+        def describe(self, frames, seconds, check=None):
+            time.sleep(0.4)
+            return "PLACE: kitchen\nDID: opens | drawer | -"
+
+        def chat(self, prompt, max_new_tokens=300):
+            return "1"
+
+    api._parts["describer"] = Slow()
+    c = TestClient(api.app)
+    vid = _video(str(tmp_path / "long.avi"), seconds=48)               # 3 pieces of 20 s, 12 windows
+    with open(vid, "rb") as f:
+        job = c.post("/api/clips", files={"file": ("long.avi", f, "video/x-msvideo")}).json()["job"]
+    seen_mid = None
+    for _ in range(600):
+        clips = c.get("/api/clips").json()["clips"]
+        cl = next((x for x in clips if x["id"] == job), None)
+        if cl and cl["status"] == "processing" and 0 < cl["processed_s"] < cl["seconds"]:
+            rows = c.get(f"/api/clips/{job}/diary").json()["rows"]
+            if rows:
+                seen_mid = (cl["processed_s"], len(rows))
+        if c.get(f"/api/jobs/{job}").json()["status"] in ("done", "failed"):
+            break
+        time.sleep(0.1)
+    assert seen_mid is not None, "the diary should be readable while the video is still processing"
+    final = next(x for x in c.get("/api/clips").json()["clips"] if x["id"] == job)
+    assert final["status"] == "done" and final["processed_s"] >= 44 and final["windows"] == 12

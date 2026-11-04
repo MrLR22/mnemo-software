@@ -40,7 +40,6 @@ from query.llm_qa import answer, fmt_row, time_range
 from services.api.alerts import alerts as find_alerts, object_states
 from services.api.clips import ClipIndex
 from services.api.clients import RemoteDescriber, RemoteTrigger
-from services.api.pipeline import process_clip
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WEB = os.path.join(ROOT, "apps", "web")
@@ -112,12 +111,16 @@ def _worker():
         job = jobs[job_id]
         job["status"] = "running"
         try:
+            from services.api.progressive import process_progressive
             _, clip = search_models()
-            def progress(msg):
-                job["step"] = msg
-            with _lock:
-                job["result"] = process_clip(path, store(), describer(), trigger(), clip, recorded_at, progress)
-            ClipIndex(DB).add(job_id, job.get("file") or "video", job["result"])
+            store()                                      # creates the diary file and its tables
+
+            def progress(info):
+                job["progress"] = info
+                job["step"] = (f"processed {info['processed_s']:.0f} of {info['seconds']:.0f} s "
+                               f"(big model on {info['described']} of {info['windows']} windows so far)")
+            job["result"] = process_progressive(path, job_id, job.get("file") or "video", DB, describer(), trigger(),
+                                                clip, recorded_at, progress)
             job["status"], job["step"] = "done", "done"
         except Exception as e:                           # the job fails, the backend keeps running
             job["status"], job["error"] = "failed", f"{type(e).__name__}: {e}"
@@ -202,8 +205,7 @@ def clip_diary(clip_id: str):
     if c is None:
         raise HTTPException(404, "no such clip")
     start = datetime.fromisoformat(c["start"])
-    with _lock:
-        rows = store().activities(start, start + timedelta(seconds=c["seconds"] + 5))
+    rows = EventStore(DB).activities(start, start + timedelta(seconds=c["seconds"] + 5))   # own connection: never waits
     out = []
     for r in rows:
         if not r.get("verb"):

@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS clips (
     seconds     REAL NOT NULL,
     windows     INTEGER,
     described   INTEGER,                -- windows the big model described
-    created     TEXT NOT NULL
+    created     TEXT NOT NULL,
+    status      TEXT DEFAULT 'done',    -- processing | done | failed
+    processed_s REAL                    -- the diary is complete up to this many seconds into the video
 );
 """
 
@@ -24,12 +26,29 @@ class ClipIndex:
         self.db = db
         with sqlite3.connect(db) as c:
             c.executescript(_SCHEMA)
+            cols = {r[1] for r in c.execute("PRAGMA table_info(clips)")}
+            for col, typ in (("status", "TEXT DEFAULT 'done'"), ("processed_s", "REAL")):
+                if col not in cols:                       # a diary file from before progressive processing
+                    c.execute(f"ALTER TABLE clips ADD COLUMN {col} {typ}")
 
     def add(self, clip_id: str, name: str, result: dict):
         with sqlite3.connect(self.db) as c:
-            c.execute("INSERT OR REPLACE INTO clips VALUES (?, ?, ?, ?, ?, ?, ?)",
+            c.execute("INSERT OR REPLACE INTO clips (id, name, start, seconds, windows, described, created, status, "
+                      "processed_s) VALUES (?, ?, ?, ?, ?, ?, ?, 'done', ?)",
                       (clip_id, name, result["start"], result["video_seconds"], result["windows"],
-                       result["big_model_calls"], datetime.now().isoformat(timespec="seconds")))
+                       result["big_model_calls"], datetime.now().isoformat(timespec="seconds"), result["video_seconds"]))
+
+    def start(self, clip_id: str, name: str, start: str, seconds: float):
+        """A long video being processed piece by piece: listed at once, answerable up to processed_s."""
+        with sqlite3.connect(self.db) as c:
+            c.execute("INSERT OR REPLACE INTO clips (id, name, start, seconds, windows, described, created, status, "
+                      "processed_s) VALUES (?, ?, ?, ?, 0, 0, ?, 'processing', 0)",
+                      (clip_id, name, start, seconds, datetime.now().isoformat(timespec="seconds")))
+
+    def progress(self, clip_id: str, processed_s: float, windows: int, described: int, status: str = "processing"):
+        with sqlite3.connect(self.db) as c:
+            c.execute("UPDATE clips SET processed_s = ?, windows = ?, described = ?, status = ? WHERE id = ?",
+                      (processed_s, windows, described, status, clip_id))
 
     def all(self) -> list[dict]:
         with sqlite3.connect(self.db) as c:

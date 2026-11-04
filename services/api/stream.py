@@ -44,7 +44,7 @@ class _Deadline:
         if left is not None and left <= 1.0:
             raise TimeoutError("no time left before the lag limit")
         try:
-            return self.d.describe(frames, seconds, check=check, timeout=left)
+            return self.d.describe(frames, seconds, check=check, timeout=None if left is None else min(left, 180.0))
         except TypeError:                                # a describer without a timeout (tests, in-process model)
             return self.d.describe(frames, seconds, check=check) if check else self.d.describe(frames, seconds)
 
@@ -72,6 +72,7 @@ class StreamSession:
                       "trigger_skipped_pieces": 0, "triggered": 0, "lag_s": [], "trigger_s": [], "big_model_s": [],
                       "errors": []}
         self.rows: list[dict] = []
+        self.processed_s = 0.0                            # the diary is complete up to here (seconds since start)
         self.done = threading.Event()
         threading.Thread(target=self._pieces_worker, daemon=True).start()
         threading.Thread(target=self._windows_worker, daemon=True).start()
@@ -179,6 +180,7 @@ class StreamSession:
                 logger.windows.append({"k": k, "t": k * W, "text": None, "called": False, "dt": 0.0})
             if late and self.recent_ok:                   # recover after a slow spell: trust the usual speed again
                 self.vlm_s = max(float(np.median(self.recent_ok)), 0.85 * self.vlm_s)
+            self.processed_s = (k + 1) * W
             if go:
                 since = 1
                 self.stats["described"] += 1

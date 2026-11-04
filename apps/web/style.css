@@ -38,3 +38,5 @@ select { flex: 1; min-width: 0; padding: 9px; border: 1px solid var(--line); bor
 .list li.new { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, transparent); } to { background: transparent; } }
 .offset { font-variant-numeric: tabular-nums; color: var(--accent); margin-right: 8px; }
+.procbar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+.procbar div { height: 100%; width: 0; background: var(--accent); transition: width .5s; }

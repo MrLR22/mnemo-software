@@ -44,13 +44,18 @@ async function watch(job) {
     const j = await api(`/api/jobs/${job}`);
     if (j.status === "done") {
       const r = j.result;
-      $("job").textContent = `Done: ${Math.round(r.video_seconds)} s of video, big model on ${r.big_model_calls} of ${r.windows} windows, ${r.rows} diary lines. Video deleted from the backend. Now pick it under "Demo replay".`;
+      watch.listed = false;
+      $("job").textContent = `Done: ${Math.round(r.video_seconds)} s of video, big model on ${r.big_model_calls} of ${r.windows} windows, ${r.rows} diary lines. Video deleted from the backend.`;
       await Promise.all([loadDiary(), loadAlerts(), loadClips()]);
       $("clips").value = job; openReplay();
       return;
     }
     if (j.status === "failed") { $("job").textContent = `Failed: ${j.error}`; return; }
     $("job").textContent = `${j.status}: ${j.step}…`;
+    if (j.progress && !watch.listed) {                  // listed under Demo replay as soon as processing starts
+      watch.listed = true;
+      await loadClips(); $("clips").value = job; openReplay().catch(() => {});
+    }
     await new Promise((ok) => setTimeout(ok, 2000));
   }
 }
@@ -94,21 +99,44 @@ let replay = null;
 async function loadClips() {
   const c = (await api("/api/clips")).clips;
   if (!c.length) return;
+  const keep = $("clips").value;
   $("clips").innerHTML = c.map((x) => `<option value="${esc(x.id)}">${esc(x.name)} · ${mmss(x.seconds)} · `
-    + `big model on ${x.described} of ${x.windows} windows · ${esc(x.created.replace("T", " "))}</option>`).join("");
+    + (x.status === "processing" ? `processing: ${Math.round(100 * (x.processed_s || 0) / x.seconds)}% done`
+       : x.status === "failed" ? "FAILED" : `big model on ${x.described} of ${x.windows} windows`)
+    + ` · ${esc(x.created.replace("T", " "))}</option>`).join("");
+  if (keep && c.some((x) => x.id === keep)) $("clips").value = keep;
 }
+
+const processed = () => (replay ? (replay.clip.status === "done" ? replay.clip.seconds : replay.clip.processed_s || 0) : 0);
+const playing = () => !!$("player").src && !$("player").hidden;
+// the moment questions refer to: where the video is (if it plays), never past the processed part
+const askMoment = () => (playing() ? Math.min($("player").currentTime, processed()) : processed());
 
 async function openReplay() {
   const id = $("clips").value;
   if (!id) { replay = null; return; }
   const d = await api(`/api/clips/${id}/diary`);
+  const same = replay && replay.clip.id === d.clip.id;
   replay = { clip: d.clip, rows: d.rows, shown: -1, start: new Date(d.clip.start) };
-  $("replaystat").textContent = `${d.rows.length} diary lines for this video. Choose the same video file to play it.`;
-  renderReplay(0);
+  $("replayview").hidden = false;
+  const done = d.clip.status === "done";
+  $("replaystat").textContent = done
+    ? `${d.rows.length} diary lines for this video. Choose the same video file to play it, or just ask below.`
+    : d.clip.status === "failed" ? "Processing failed for this video."
+    : `Still processing: done up to ${mmss(processed())} of ${mmss(d.clip.seconds)}. You can already ask about that part`
+      + ` (and play it: choose the same video file).`;
+  $("procbar").hidden = done;
+  $("procfill").style.width = `${Math.round(100 * processed() / d.clip.seconds)}%`;
+  $("askhead").textContent = playing() ? "Ask (as of this moment in the video)" : `Ask about the processed part (0:00–${mmss(processed())})`;
+  renderReplay(playing() ? $("player").currentTime : processed());
+  clearTimeout(openReplay.timer);
+  if (d.clip.status === "processing") openReplay.timer = setTimeout(() => { openReplay().catch(() => {}); loadClips().catch(() => {}); }, 5000);
+  if (!same && !playing()) renderReplay(processed());
 }
 
 function renderReplay(t) {
   if (!replay) return;
+  t = Math.min(t, processed());
   const upto = replay.rows.filter((r) => r.offset_s <= t);
   if (upto.length === replay.shown) return;
   const fresh = upto.length > replay.shown && replay.shown >= 0;
@@ -133,6 +161,7 @@ $("replayfile").addEventListener("change", (e) => {
   const p = $("player");
   p.src = URL.createObjectURL(f);                       // played from this device: the video is never uploaded again
   p.hidden = false; $("replayview").hidden = false;
+  $("askhead").textContent = "Ask (as of this moment in the video)";
   if (replay) replay.shown = -1;
   renderReplay(0);
 });
@@ -141,7 +170,7 @@ $("player").addEventListener("seeked", () => { if (replay) replay.shown = -1; re
 $("rask").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!replay) return;
-  const t = $("player").currentTime;
+  const t = askMoment();
   const at = new Date(replay.start.getTime() + t * 1000);
   const iso = new Date(at.getTime() - at.getTimezoneOffset() * 60000).toISOString().slice(0, 19);   // local time
   const box = $("ranswer");
@@ -150,7 +179,8 @@ $("rask").addEventListener("submit", async (e) => {
     const r = await api("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" },
                                       body: JSON.stringify({ question: $("rq").value, at: iso }) });
     const off = (iso2) => mmss((new Date(iso2) - replay.start) / 1000);
-    box.innerHTML = `<div>${esc(r.answer)}</div><div class="moment">As of ${mmss(t)} in the video`
+    const note = playing() && $("player").currentTime > processed() ? ` (processed only up to ${mmss(processed())} so far)` : "";
+    box.innerHTML = `<div>${esc(r.answer)}</div><div class="moment">As of ${mmss(t)} in the video${note}`
       + (r.moment ? ` · best moment ${off(r.moment.start)}–${off(r.moment.end)}: ${esc(r.moment.what)}` : "") + "</div>";
   } catch (err) { box.textContent = `Could not answer: ${err.message}`; }
 });
