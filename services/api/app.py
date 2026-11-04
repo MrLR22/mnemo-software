@@ -36,7 +36,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from modules.storage import EventStore
-from query.llm_qa import answer, fmt_row, time_range
+from query.llm_qa import fmt_row, time_range
+from services.api.answers import smart_answer
 from services.api.alerts import alerts as find_alerts, object_states
 from services.api.clips import ClipIndex
 from services.api.clients import RemoteDescriber, RemoteTrigger
@@ -180,7 +181,7 @@ def ask(req: AskIn):
     now = datetime.fromisoformat(req.at) if req.at else datetime.now()
     with _lock:
         s = Searcher(store(), text=text, clip=clip) if text is not None else None
-        r = answer(req.question, store(), llm=describer(), now=now, searcher=s)
+        r = smart_answer(req.question, store(), llm=describer(), now=now, searcher=s)
         moment = None
         if s is not None:
             start, end, _ = time_range(req.question, now)

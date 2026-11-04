@@ -136,3 +136,39 @@ def test_long_video_is_answerable_while_processing(tmp_path, monkeypatch):
     assert seen_mid is not None, "the diary should be readable while the video is still processing"
     final = next(x for x in c.get("/api/clips").json()["clips"] if x["id"] == job)
     assert final["status"] == "done" and final["processed_s"] >= 44 and final["windows"] == 12
+
+
+def test_count_answers(tmp_path):
+    from datetime import datetime, timedelta
+    from modules.storage import EventStore
+    from services.api.answers import count_answer
+    st = EventStore(str(tmp_path / "c.db"))
+    t = datetime(2026, 11, 4, 11, 35)
+    for i, (v, o) in enumerate([("turns on", "tap"), ("turns off", "tap"), ("turns on", "tap"), ("turns off", "tap"),
+                                ("picks up", "cup"), ("picks up", "measuring cup"), ("opens", "fridge")]):
+        st.add_activity({"ts_start": t + timedelta(seconds=4 * i), "ts_end": t + timedelta(seconds=4 * i + 4), "verb": v, "object": o})
+    now = t + timedelta(minutes=5)
+    assert count_answer("how many times did I turn off the tap?", st, now)["answer"].startswith("2 times")
+    assert count_answer("how many times did I turn on the tap?", st, now)["answer"].startswith("2 times")
+    assert count_answer("hey how many times did i pick the cup", st, now)["answer"].startswith("1 time ")
+    assert count_answer("how often did I open the fridge", st, now)["answer"].startswith("1 time ")
+    assert count_answer("how many times did I eat?", st, now) is None              # nothing matches: the model answers
+    assert count_answer("did I close the fridge?", st, now) is None                # not a count
+
+
+def test_state_answers(tmp_path):
+    from datetime import datetime, timedelta
+    from modules.storage import EventStore
+    from services.api.answers import state_answer
+    st = EventStore(str(tmp_path / "s.db"))
+    t = datetime(2026, 11, 4, 11, 35)
+    for i, (v, o) in enumerate([("opens", "fridge"), ("turns on", "tap"), ("turns off", "tap"), ("opens", "drawer"), ("closes", "drawer")]):
+        st.add_activity({"ts_start": t + timedelta(seconds=4 * i), "ts_end": t + timedelta(seconds=4 * i + 4), "verb": v, "object": o})
+    now = t + timedelta(minutes=5)
+    a = state_answer("did I close the fridge?", st, now)["answer"]
+    assert a.startswith("Not that I saw") and "did not see you close it" in a and "OPEN" in a
+    assert state_answer("is the fridge still open?", st, now)["answer"].startswith("Probably yes")
+    assert state_answer("did I turn off the tap?", st, now)["answer"].startswith("Yes")
+    assert state_answer("is the drawer still open?", st, now)["answer"].startswith("No: you closed the drawer")
+    assert state_answer("did I close the oven?", st, now) is None                 # nothing known about the oven
+    assert state_answer("where did I put the cup?", st, now) is None              # not a state question
