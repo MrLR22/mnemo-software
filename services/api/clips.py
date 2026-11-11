@@ -58,6 +58,11 @@ class ClipIndex:
     def get(self, clip_id: str) -> dict | None:
         return next((c for c in self.all() if c["id"] == clip_id), None)
 
+    def mark_interrupted(self):
+        """Processing runs inside the backend: a recording still 'processing' at startup was cut off."""
+        with sqlite3.connect(self.db) as c:
+            c.execute("UPDATE clips SET status = 'failed' WHERE status = 'processing'")
+
     def delete(self, clip_id: str) -> bool:
         """Forget one recording and the diary lines and fingerprints inside its time span."""
         c = self.get(clip_id)

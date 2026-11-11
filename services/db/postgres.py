@@ -187,6 +187,10 @@ class PgClipIndex:
     def get(self, clip_id: str) -> dict | None:
         return next((c for c in self.all() if c["id"] == clip_id), None)
 
+    def mark_interrupted(self):
+        """Processing runs inside the backend: a recording still 'processing' at startup was cut off."""
+        self._run("UPDATE clips SET status = 'failed' WHERE status = 'processing'")
+
     def delete(self, clip_id: str) -> bool:
         """Forget one recording: its diary lines, search vectors and questions go with it."""
         with connect(self.url) as c:
@@ -230,7 +234,7 @@ class PgQuestionLog:
         return rows
 
 
-def table_stats(url: str) -> list[dict]:
+def table_stats(url: str) -> dict:
     """Rows and size per table: the System screen shows the database as its own part."""
     with connect(url) as c:
         rows = c.execute(
@@ -242,4 +246,14 @@ def table_stats(url: str) -> list[dict]:
         ver = c.execute("SHOW server_version").fetchone()["server_version"]
         size = c.execute("SELECT pg_database_size(current_database()) AS b, current_database() AS db").fetchone()
     return {"engine": f"PostgreSQL {ver}", "database": size["db"], "bytes": size["b"],
-            "tables": [dict(r, rows=exact[r["table"]]) for r in rows]}
+            "tables": [dict(r, rows=exact[r["table"]]) for r in rows], "views": ["clip_diary", "clip_summary"]}
+
+
+def browse(url: str, table: str, limit: int) -> tuple[list[str], list[tuple], int]:
+    """table is checked by the caller against a fixed list."""
+    with psycopg.connect(url) as c:
+        cur = c.execute(f'SELECT * FROM "{table}" ORDER BY 1 DESC LIMIT %s', (limit,))
+        cols = [d.name for d in cur.description]
+        rows = cur.fetchall()
+        total = c.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+    return cols, rows, total

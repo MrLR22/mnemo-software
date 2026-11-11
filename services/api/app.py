@@ -22,7 +22,9 @@
 #   uvicorn services.api.app:app --host 0.0.0.0 --port 8000
 
 import collections
+import contextlib
 import os
+import re
 import queue
 import tempfile
 import threading
@@ -33,6 +35,7 @@ from datetime import datetime, timedelta
 import services  # noqa: F401  (puts the research code on the path)
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+import requests
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -40,14 +43,44 @@ from query.llm_qa import fmt_row, time_range
 from services.api.answers import smart_answer
 from services.api.alerts import alerts as find_alerts, object_states
 from services.api.clients import RemoteDescriber, RemoteTrigger
-from services.db import is_postgres, location, open_clips, open_questions, open_store, stats as db_stats
+from services.db import browse as db_browse, is_postgres, location, open_clips, open_questions, open_store, stats as db_stats
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WEB = os.path.abspath(os.environ.get("ENGRAM_WEB_DIR", os.path.join(ROOT, "apps", "web", "dist")))  # built React app
 DB = location()                                               # ENGRAM_DB_URL (PostgreSQL) or ENGRAM_DB (SQLite file)
 STARTED = datetime.now()
 
-app = FastAPI(title="ENGRAM backend")
+
+@contextlib.contextmanager
+def reading():
+    """A short-lived connection for one request: a slow question never holds up the other screens."""
+    if not is_postgres(DB):
+        store()                                      # creates the diary file and its tables
+    db = open_store(DB)
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    try:                                             # processing lives in this process: nothing survives a restart
+        open_clips(DB).mark_interrupted()
+    except Exception as e:
+        print(f"database not reachable at startup: {e}")
+    threading.Thread(target=lambda: _try(search_models), daemon=True).start()   # so the first question is not slow
+    yield
+
+
+def _try(fn):
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+app = FastAPI(title="Mnemo backend", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -112,6 +145,15 @@ def search_models():
     return _parts["text"], _parts["clip"]
 
 
+def _why(e: Exception) -> str:
+    """The reason a job failed, in words the app can show."""
+    if isinstance(e, HTTPException):
+        return str(e.detail)
+    if isinstance(e, requests.RequestException):
+        return "A model service stopped responding. Check the System screen, then upload the video again."
+    return f"{type(e).__name__}: {e}"
+
+
 def _worker():
     while True:
         job_id, path, recorded_at = _queue.get()
@@ -130,7 +172,7 @@ def _worker():
                                                 clip, recorded_at, progress)
             job["status"], job["step"] = "done", "done"
         except Exception as e:                           # the job fails, the backend keeps running
-            job["status"], job["error"] = "failed", f"{type(e).__name__}: {e}"
+            job["status"], job["error"] = "failed", _why(e)
         finally:
             if os.path.exists(path):
                 os.remove(path)
@@ -160,9 +202,18 @@ def job(job_id: str):
     return jobs[job_id]
 
 
+_NOT_A_PLACE = re.compile(r"(puts?|places?|picks?|takes?)\b", re.I)
+
+
+def ended_up(where: str | None) -> str | None:
+    """The model sometimes writes "counter -> puts down" or "counter -> shelf": keep where the object ended up."""
+    places = [p.strip() for p in (where or "").split("->") if p.strip() and not _NOT_A_PLACE.match(p.strip())]
+    return places[-1] if places else None
+
+
 def _row(r: dict) -> dict:
     return {"start": r["ts_start"].isoformat(timespec="seconds"), "end": r["ts_end"].isoformat(timespec="seconds"),
-            "verb": r.get("verb"), "object": r.get("object"), "where": r.get("where"), "place": r.get("place"),
+            "verb": r.get("verb"), "object": r.get("object"), "where": ended_up(r.get("where")), "place": r.get("place"),
             "source": r.get("source"), "line": fmt_row(r)}
 
 
@@ -170,9 +221,17 @@ def _row(r: dict) -> dict:
 def diary(day: str | None = None):
     d = datetime.fromisoformat(day) if day else datetime.now()
     d0 = d.replace(hour=0, minute=0, second=0, microsecond=0)
-    with _lock:
-        rows = store().activities(d0, d0 + timedelta(days=1))
+    with reading() as db:
+        rows = db.activities(d0, d0 + timedelta(days=1))
     return {"day": d0.date().isoformat(), "rows": [_row(r) for r in rows if r.get("verb")]}
+
+
+@app.get("/api/days")
+def days():
+    """The days that have diary lines, newest first."""
+    with reading() as db:
+        n = collections.Counter(r["ts_start"].date().isoformat() for r in db.activities() if r.get("verb"))
+    return {"days": [{"day": d, "lines": n[d]} for d in sorted(n, reverse=True)]}
 
 
 class AskIn(BaseModel):
@@ -187,13 +246,19 @@ def ask(req: AskIn):
     t0 = time.perf_counter()
     text, clip = search_models()
     now = datetime.fromisoformat(req.at) if req.at else datetime.now()
-    with _lock:
-        s = Searcher(store(), text=text, clip=clip) if text is not None else None
-        r = smart_answer(req.question, store(), llm=describer(), now=now, searcher=s)
+    llm = _try(describer) if _big_model_up() else None      # counts and open/closed answers never need it
+    degraded = llm is None
+    with reading() as db:
+        s = Searcher(db, text=text, clip=clip) if text is not None else None
+        try:
+            r = smart_answer(req.question, db, llm=llm, now=now, searcher=s)
+        except requests.RequestException:            # the tunnel dropped: still answer from the diary
+            llm, degraded = None, True
+            r = smart_answer(req.question, db, llm=None, now=now, searcher=s)
         moment = None
         if s is not None:
             start, end, _ = time_range(req.question, now)
-            m = s.moment(req.question, start, end, llm=describer())
+            m = _try(lambda: s.moment(req.question, start, end, llm=llm))
             if m:
                 moment = {"start": m["ts_start"].isoformat(timespec="seconds"), "end": m["ts_end"].isoformat(timespec="seconds"),
                           "what": "not described; the camera image matches" if m["row"].get("image_only") else fmt_row(m["row"]).split(" | ", 1)[1]}
@@ -206,7 +271,7 @@ def ask(req: AskIn):
     except Exception:                                # the answer matters more than its log entry
         qid = None
     return {"id": qid, "answer": r["answer"], "kind": r.get("mode", "search"), "moment": moment,
-            "evidence": evidence, "latency_ms": ms}
+            "evidence": evidence, "latency_ms": ms, "degraded": degraded and r.get("mode") not in ("count", "state")}
 
 
 @app.get("/api/questions")
@@ -256,8 +321,10 @@ def clip_diary(clip_id: str):
 
 @app.get("/api/alerts")
 def alerts():
-    with _lock:
-        rows = store().activities(datetime.now() - timedelta(days=1), None)
+    with reading() as db:
+        rows = db.activities()
+    if rows:                                         # the 24 hours up to the last thing recorded
+        rows = [r for r in rows if r["ts_end"] >= rows[-1]["ts_end"] - timedelta(days=1)]
     return {"alerts": find_alerts(rows)}
 
 
@@ -317,23 +384,34 @@ def _database_health() -> str:
         return f"unreachable: {type(e).__name__}"
 
 
+_health: dict = {"t": 0.0, "value": None}
+
+
 @app.get("/api/health")
 def health():
-    out = {"backend": "ok", "database": _database_health()}
-    for name, get in (("big_model", describer), ("small_model", trigger)):
-        try:
-            part = get()
-            out[name] = part.health() if part is not None else "off"
-        except Exception as e:
-            out[name] = f"unreachable: {type(e).__name__}"
-    return out
+    """Which parts are reachable (asked at most every 10 s: the checks go over the network)."""
+    if _health["value"] is None or time.monotonic() - _health["t"] > 10:
+        out = {"backend": "ok", "database": _database_health()}
+        for name, get in (("big_model", describer), ("small_model", trigger)):
+            try:
+                part = get()
+                out[name] = part.health() if part is not None else "off"
+            except Exception as e:
+                out[name] = f"unreachable: {type(e).__name__}"
+        _health.update(t=time.monotonic(), value=out)
+    return _health["value"]
+
+
+def _big_model_up() -> bool:
+    h = _try(health)
+    return bool(h) and isinstance(h.get("big_model"), dict)
 
 
 @app.get("/api/overview")
 def overview():
     """Numbers for the home screen: recordings, diary lines, objects, questions, last activity."""
-    with _lock:
-        rows = [r for r in store().activities() if r.get("verb")]
+    with reading() as db:
+        rows = [r for r in db.activities() if r.get("verb")]
     clip_list = open_clips(DB).all()
     verbs = collections.Counter((r["verb"] or "").strip() for r in rows)
     objs = collections.Counter((r.get("object") or "").strip().lower() for r in rows if r.get("object"))
@@ -354,8 +432,8 @@ def overview():
 def objects():
     """Every object in the diary: how often it was handled, the last thing done with it, where it ended up,
     and its open/closed/on/off state if it has one ("where did I leave my keys?" at a glance)."""
-    with _lock:
-        rows = [r for r in store().activities() if r.get("verb") and r.get("object")]
+    with reading() as db:
+        rows = [r for r in db.activities() if r.get("verb") and r.get("object")]
     states = object_states(rows)
     by: dict[str, dict] = {}
     for r in rows:
@@ -363,7 +441,7 @@ def objects():
         o = by.setdefault(name, {"object": name, "count": 0, "first": r["ts_start"], "where": None})
         o["count"] += 1
         o["last"], o["last_action"] = r["ts_end"], r["verb"]
-        o["where"] = r.get("where") or o["where"]
+        o["where"] = ended_up(r.get("where")) or o["where"]
     out = []
     for o in by.values():
         st = states.get(o["object"]) or states.get(o["object"] + " power")
@@ -390,6 +468,15 @@ def system():
                         "name": "HOI-TCN interaction trigger (ours)"},
         "big_model": {"status": h["big_model"], "name": "Qwen3-VL-4B describer (remote GPU)"},
     }
+
+
+@app.get("/api/system/tables/{table}")
+def browse_table(table: str, limit: int = 100):
+    """Read-only view of one database table for the System screen; vectors are shown by size, not content."""
+    try:
+        return db_browse(DB, table, min(limit, 500))
+    except KeyError:
+        raise HTTPException(404, "no such table")
 
 
 @app.get("/{path:path}")

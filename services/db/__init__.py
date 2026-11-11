@@ -57,6 +57,37 @@ def stats(db: str) -> dict:
             "bytes": os.path.getsize(db) if os.path.exists(db) else 0, "tables": tables}
 
 
+BROWSABLE = ("clips", "activities", "fingerprints", "text_vectors", "questions", "events", "clip_diary", "clip_summary")
+
+
+def _cell(v):
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return f"vector · {len(bytes(v)) // 2} numbers"
+    if isinstance(v, datetime):
+        return v.isoformat(sep=" ", timespec="milliseconds" if v.microsecond else "seconds")
+    if isinstance(v, str) and len(v) > 240:
+        return v[:240] + "…"
+    return v
+
+
+def browse(db: str, table: str, limit: int = 100) -> dict:
+    """The newest rows of one table, ready to display."""
+    if table not in BROWSABLE:
+        raise KeyError(table)
+    if is_postgres(db):
+        from services.db.postgres import browse as pg_browse
+        cols, rows, total = pg_browse(db, table, limit)
+    else:
+        with sqlite3.connect(db) as c:
+            try:
+                cur = c.execute(f'SELECT * FROM "{table}" ORDER BY 1 DESC LIMIT ?', (limit,))
+            except sqlite3.OperationalError:
+                raise KeyError(table)
+            cols, rows = [d[0] for d in cur.description], cur.fetchall()
+            total = c.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+    return {"table": table, "columns": cols, "rows": [[_cell(v) for v in r] for r in rows], "total": total}
+
+
 class SqliteQuestionLog:
     _SCHEMA = """CREATE TABLE IF NOT EXISTS questions (
         id INTEGER PRIMARY KEY AUTOINCREMENT, asked_at TEXT NOT NULL, question TEXT NOT NULL, answer TEXT NOT NULL,

@@ -26,7 +26,7 @@ class RemoteDescriber:
         return self._post("/describe", {"frames": encode_frames(frames_bgr), "seconds": seconds, "check": check}, timeout)
 
     def chat(self, prompt: str, max_new_tokens: int = 300) -> str:
-        return self._post("/chat", {"prompt": prompt, "max_new_tokens": max_new_tokens})
+        return self._post("/chat", {"prompt": prompt, "max_new_tokens": max_new_tokens}, timeout=60)  # a person is waiting
 
     def health(self) -> dict:
         return requests.get(self.url + "/health", timeout=10).json()
