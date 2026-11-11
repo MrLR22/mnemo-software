@@ -22,7 +22,7 @@ def _video(frames_bgr: list[np.ndarray], seconds: float) -> tuple[np.ndarray, di
     return video, meta
 
 
-def describe_batch(d, items: list[tuple[list[np.ndarray], float, list[str] | None]]) -> list[str]:
+def describe_batch(d, items: list[tuple[list[np.ndarray], float, list[str] | None]], version: str | None = None) -> list[str]:
     """d: a modules.vlm_logger.VLMDescriber. items: (frames_bgr, seconds, check) per window → one text per window."""
     from transformers import StoppingCriteria, StoppingCriteriaList
     from transformers.video_utils import VideoMetadata
@@ -30,7 +30,7 @@ def describe_batch(d, items: list[tuple[list[np.ndarray], float, list[str] | Non
     texts, videos, metas = [], [], []
     for frames, seconds, check in items:
         video, meta = _video(frames, seconds)
-        prompt = build_prompt(meta["total_num_frames"], seconds, d.track_states, check)
+        prompt = build_prompt(meta["total_num_frames"], seconds, d.track_states, check, version)
         msgs = [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": prompt}]}]
         texts.append(proc.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True))
         videos.append(video)

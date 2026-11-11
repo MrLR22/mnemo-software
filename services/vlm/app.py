@@ -12,6 +12,8 @@
 #
 #   ENGRAM_VLM_TOKEN=secret uvicorn services.vlm.app:app --port 8002
 #   ENGRAM_VLM_FAKE=1 → scripted answers, no GPU (tests and trying the apps without Kaggle)
+#   ENGRAM_VLM_PROMPT: the prompt version used when a request names none (default lines-v6: any place, any action
+#   verb; lines-v3 = the kitchen-era prompt of the paper's experiments). A request may name its own ("prompt").
 #   ENGRAM_VLM_REPLICAS: model copies, one per GPU (default: every GPU, e.g. 2 on Kaggle "GPU T4 x2"). A batch is
 #   split between them, so two GPUs describe twice as many windows in the same time.
 
@@ -35,11 +37,11 @@ _model = {"describer": None, "name": None, "pool": None, "replicas": []}
 class FakeDescriber:
     """No GPU: always the same plausible answer (for tests and for trying the apps)."""
 
-    def describe(self, frames, seconds, check=None):
+    def describe(self, frames, seconds, check=None, version=None):
         time.sleep(float(os.environ.get("ENGRAM_VLM_FAKE_DELAY", "0")))   # e.g. 6.6 = Qwen3-VL-4B on a T4
         return "PLACE: kitchen\nSTATE: fridge = closed\nDID: picks up | cup | counter"
 
-    def describe_batch(self, items):
+    def describe_batch(self, items, version=None):
         return [self.describe(f, s, c) for f, s, c in items]
 
     def chat(self, prompt, max_new_tokens=300):
@@ -87,17 +89,22 @@ class _Borrow:
         _model["pool"].put(self.d)
 
 
-def _run_batch(d, items):
+def _prompt(version: str | None) -> str:
+    return version or os.environ.get("ENGRAM_VLM_PROMPT", "lines-v6")
+
+
+def _run_batch(d, items, version):
     if isinstance(d, FakeDescriber):
-        return d.describe_batch(items)
+        return d.describe_batch(items, version)
     from services.vlm.batch import describe_batch
-    return describe_batch(d, items)
+    return describe_batch(d, items, version)
 
 
 class DescribeIn(BaseModel):
     frames: list[str]
     seconds: float
     check: list[str] | None = None
+    prompt: str | None = None                     # prompt version; None = the service default
 
 
 class BatchItem(BaseModel):
@@ -108,6 +115,7 @@ class BatchItem(BaseModel):
 
 class BatchIn(BaseModel):
     items: list[BatchItem]
+    prompt: str | None = None
 
 
 class ChatIn(BaseModel):
@@ -122,7 +130,7 @@ def _load():
 
 @app.get("/health")
 def health():
-    return {"model": _model["name"], "ready": _model["describer"] is not None, "prompt": C.VLM_PROMPT_VERSION,
+    return {"model": _model["name"], "ready": _model["describer"] is not None, "prompt": _prompt(None),
             "replicas": len(_model["replicas"]), "batch": True}
 
 
@@ -131,7 +139,7 @@ def describe(req: DescribeIn):
     frames = decode_frames(req.frames)
     t0 = time.time()
     with _Borrow() as d:
-        text = d.describe(frames, req.seconds, check=req.check) if req.check else d.describe(frames, req.seconds)
+        text = d.describe(frames, req.seconds, check=req.check, version=_prompt(req.prompt))
     return {"text": text, "model_seconds": round(time.time() - t0, 2)}
 
 
@@ -147,7 +155,7 @@ def describe_batch(req: BatchIn):
 
     def work(idx):
         with _Borrow() as d:
-            return idx, _run_batch(d, [items[i] for i in idx])
+            return idx, _run_batch(d, [items[i] for i in idx], _prompt(req.prompt))
 
     texts = [""] * len(items)
     with ThreadPoolExecutor(len(parts)) as ex:

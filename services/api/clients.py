@@ -2,6 +2,8 @@
 # How the backend talks to the two model services. Each client has the same methods as the in-process objects it
 # replaces, so the diary code (modules/vlm_logger.ActionLogger) and the answers (query/llm_qa.answer) work unchanged.
 
+import os
+
 import numpy as np
 import requests
 
@@ -14,6 +16,7 @@ class RemoteDescriber:
     def __init__(self, url: str, token: str = "", timeout: float = 180.0):
         self.url, self.timeout = url.rstrip("/"), timeout
         self.headers = {TOKEN_HEADER: token} if token else {}
+        self.prompt = os.environ.get("ENGRAM_VLM_PROMPT") or None    # None: the service's default prompt
 
     def _post(self, path: str, body: dict, timeout: float | None = None) -> str:
         r = requests.post(self.url + path, json=body, headers=self.headers, timeout=timeout or self.timeout)
@@ -23,7 +26,8 @@ class RemoteDescriber:
     def describe(self, frames_bgr: list[np.ndarray], seconds: float, check: list[str] | None = None,
                  timeout: float | None = None) -> str:
         """timeout: give up after this many seconds (live mode: the time left before the lag limit)."""
-        return self._post("/describe", {"frames": encode_frames(frames_bgr), "seconds": seconds, "check": check}, timeout)
+        return self._post("/describe", {"frames": encode_frames(frames_bgr), "seconds": seconds, "check": check,
+                                        "prompt": self.prompt}, timeout)
 
     batch: bool | None = None                    # None: not known yet whether the service has /describe_batch
 
@@ -33,7 +37,7 @@ class RemoteDescriber:
         without the batch endpoint: the caller then describes the windows one by one."""
         if self.batch is False:
             return None
-        body = {"items": [{"frames": encode_frames(f), "seconds": s, "check": c} for f, s, c in items]}
+        body = {"items": [{"frames": encode_frames(f), "seconds": s, "check": c} for f, s, c in items], "prompt": self.prompt}
         r = requests.post(self.url + "/describe_batch", json=body, headers=self.headers, timeout=timeout or self.timeout)
         if r.status_code in (404, 405):
             self.batch = False
