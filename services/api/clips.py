@@ -57,3 +57,16 @@ class ClipIndex:
 
     def get(self, clip_id: str) -> dict | None:
         return next((c for c in self.all() if c["id"] == clip_id), None)
+
+    def delete(self, clip_id: str) -> bool:
+        """Forget one recording and the diary lines and fingerprints inside its time span."""
+        c = self.get(clip_id)
+        if c is None:
+            return False
+        from datetime import timedelta
+        t1 = (datetime.fromisoformat(c["start"]) + timedelta(seconds=c["seconds"] + 5)).isoformat(timespec="seconds")
+        with sqlite3.connect(self.db) as con:
+            con.execute("DELETE FROM activities WHERE ts_start >= ? AND ts_start < ?", (c["start"], t1))
+            con.execute("DELETE FROM fingerprints WHERE ts_start >= ? AND ts_start < ?", (c["start"], t1))
+            con.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+        return True

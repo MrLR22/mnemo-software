@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 import numpy as np
 
 import config as C
-from modules.storage import EventStore
+from services.db import open_store
 from modules.types import Frame
 from modules.vlm_logger import ActionLogger
 from services.api.pipeline import normalise
@@ -135,7 +135,7 @@ class StreamSession:
 
     # ── thread B ──
     def _windows_worker(self):
-        store = EventStore(self.db)                       # this thread's own connection
+        store = open_store(self.db)                       # this thread's own connection
         logger = ActionLogger(self.describer, store, embedder=self.embedder)
         logger.windows = []
         since, call = self.heartbeat, []

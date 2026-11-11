@@ -12,7 +12,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 
-from services.api.clips import ClipIndex
+from services.db import open_clips
 from services.api.stream import StreamSession
 
 PIECE_S = 20.0
@@ -30,7 +30,7 @@ def video_seconds(path: str) -> float:
 
 def process_progressive(path: str, clip_id: str, name: str, db: str, describer, trigger=None, embedder=None,
                         recorded_at: datetime | None = None, progress=lambda info: None) -> dict:
-    clips = ClipIndex(db)
+    clips = open_clips(db)
     work = tempfile.mkdtemp(prefix="engram_pieces_")
     try:
         sec = video_seconds(path)

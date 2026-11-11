@@ -81,6 +81,11 @@ def test_lag_guard_skips_instead_of_falling_behind(tmp_path):
 def test_app_token(tmp_path, monkeypatch):
     monkeypatch.setenv("ENGRAM_APP_TOKEN", "tok")
     monkeypatch.setenv("ENGRAM_DB", str(tmp_path / "e.db"))
+    monkeypatch.delenv("ENGRAM_DB_URL", raising=False)
+    web = tmp_path / "web"                                               # stand-in for the built React app
+    web.mkdir()
+    (web / "index.html").write_text("<!doctype html><title>Mnemo</title>")
+    monkeypatch.setenv("ENGRAM_WEB_DIR", str(web))
     import importlib
     import services.api.app as api
     importlib.reload(api)
