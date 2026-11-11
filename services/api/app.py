@@ -285,7 +285,7 @@ def ask(req: AskIn):
     except Exception:                                # the answer matters more than its log entry
         qid = None
     return {"id": qid, "answer": r["answer"], "kind": r.get("mode", "search"), "moment": moment,
-            "evidence": evidence, "latency_ms": ms, "degraded": degraded and r.get("mode") not in ("count", "state")}
+            "evidence": evidence, "latency_ms": ms, "read_as": r.get("read_as"), "degraded": degraded and r.get("mode") not in ("count", "state")}
 
 
 @app.get("/api/questions")

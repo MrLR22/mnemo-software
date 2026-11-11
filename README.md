@@ -30,7 +30,8 @@ The parts only talk over HTTP. The model wrappers, diary and search code come fr
 
 ## Run it (testing)
 
-1. **Big model on Kaggle:** import `services/vlm/kaggle_vlm_service.ipynb`, GPU T4 + Internet on, **Run All**,
+1. **Big model on Kaggle:** import `services/vlm/kaggle_vlm_service.ipynb`, accelerator **GPU T4 x2** (one model
+   copy per GPU: twice as many windows per second) + Internet on, **Run All**,
    keep the tab open. Its last cell prints `ENGRAM_VLM_URL=...` and `ENGRAM_VLM_TOKEN=...`.
 2. **On the laptop:** set up PostgreSQL once (`database/README.md`), `cp .env.example .env`, paste those two lines, then
    `./scripts/run_local.sh` (it builds the web app the first time).
@@ -49,6 +50,10 @@ reached and questions are answered about that part. The file stays in this brows
 while it plays, diary lines and open objects appear at the moment they happen, and questions are answered as of that
 moment (`/api/clips`, `/api/clips/{id}/diary`, `/api/ask` with `at`). If the big model is offline, counts and
 open/closed answers still work, and other questions fall back to the matching diary lines.
+
+Speed: the backend sends up to `ENGRAM_VLM_BATCH` (default 4) flagged windows in one call to `/describe_batch`; the
+model writes all their descriptions in one pass, and with two GPUs each takes half. An older big model service without
+that endpoint still works (one window per call).
 
 ## Live mode (future work: backend only for now; lag ≤ 45 s, never above 60 s)
 

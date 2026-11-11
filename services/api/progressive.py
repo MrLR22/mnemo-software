@@ -38,7 +38,8 @@ def process_progressive(path: str, clip_id: str, name: str, db: str, describer, 
             raise ValueError("could not read the video length")
         start = recorded_at or (datetime.now() - timedelta(seconds=sec))
         clips.start(clip_id, name, start.isoformat(timespec="seconds"), sec)
-        s = StreamSession(clip_id, db, describer, trigger, embedder, max_lag_s=10 ** 9, started_at=start)
+        s = StreamSession(clip_id, db, describer, trigger, embedder, max_lag_s=10 ** 9, started_at=start,
+                          batch=int(os.environ.get("ENGRAM_VLM_BATCH", "4")))
 
         def report(state="processing"):
             st = s.stats

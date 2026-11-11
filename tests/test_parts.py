@@ -27,6 +27,10 @@ def test_vlm_service_needs_the_token(monkeypatch):
     assert c.post("/describe", json=body).status_code == 401
     r = c.post("/describe", json=body, headers={"X-Engram-Token": "secret"})
     assert r.status_code == 200 and "DID:" in r.json()["text"]
+    item = {"frames": body["frames"], "seconds": 4.0, "check": ["fridge"]}
+    r = c.post("/describe_batch", json={"items": [item, item, item]}, headers={"X-Engram-Token": "secret"})
+    assert r.status_code == 200 and len(r.json()["texts"]) == 3 and all("DID:" in t for t in r.json()["texts"])
+    assert c.get("/health").json()["batch"] is True
 
 
 def test_backend_clip_to_diary_to_answer(tmp_path, monkeypatch):

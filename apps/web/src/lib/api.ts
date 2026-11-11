@@ -40,6 +40,7 @@ export interface AskResult {
   evidence: DiaryRow[];
   latency_ms: number;
   degraded: boolean;
+  read_as?: string | null;
 }
 
 export interface QuestionRecord {

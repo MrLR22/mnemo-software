@@ -7,11 +7,34 @@
 #   - Everything else goes to llm_qa.answer with the combined search, but only the best QA_SEARCH_LINES lines
 #     (a 4B model answered worse with ~50 lines than with ~20).
 
+#   - Typing slips ("did i close my fridgeg", "did i turn of the tap") are corrected first, against the words that
+#     can matter (objects in the diary, tracked objects, question words), so the exact routes above still apply.
+
+import difflib
 import re
 
 from query.llm_qa import answer as llm_answer, norm_tokens, time_range
 
 QA_SEARCH_LINES = 20
+_QUESTION_WORDS = {"close", "closed", "open", "opened", "turn", "turned", "switch", "switched", "times", "many", "often",
+                   "pick", "picked", "put", "where", "when", "still", "leave", "left", "take", "took", "today",
+                   "yesterday", "morning", "evening", "fridge", "freezer", "drawer", "cupboard", "door", "tap", "stove",
+                   "oven", "microwave", "light", "dishwasher", "kettle", "glass", "bottle", "keys", "phone", "wallet"}
+_OF = re.compile(r"\b(turn(?:ed)?|switch(?:ed)?)\s+of\b", re.I)
+
+
+def tidy_question(question: str, diary_words: set[str]) -> str:
+    """Correct typing slips in words that decide the answer; every other word is left as it was typed."""
+    q = _OF.sub(r"\1 off", question)
+    vocab = _QUESTION_WORDS | {w for w in diary_words if len(w) > 2}
+
+    def fix(m: re.Match) -> str:
+        w = m.group(0)
+        if len(w) < 4 or w.lower() in vocab:
+            return w
+        close = difflib.get_close_matches(w.lower(), vocab, n=1, cutoff=0.8)
+        return close[0] if close else w
+    return re.sub(r"[A-Za-z]+", fix, q)
 _COUNT = re.compile(r"\bhow (many|often)\b|\bnumber of times\b", re.I)
 _ONOFF = re.compile(r"\b(on|off)\b", re.I)  # "turned on" ≠ "turned off" (norm_tokens drops "on" as a stop word)
 
@@ -92,5 +115,10 @@ def state_answer(question: str, store, now) -> dict | None:
 
 
 def smart_answer(question: str, store, llm=None, now=None, searcher=None) -> dict:
-    return count_answer(question, store, now) or state_answer(question, store, now) or \
-        llm_answer(question, store, llm=llm, now=now, searcher=_Top(searcher, QA_SEARCH_LINES) if searcher else None)
+    words = {w for r in store.activities() for w in re.findall(r"[a-z]+", (r.get("object") or "").lower())}
+    q = tidy_question(question, words)
+    r = count_answer(q, store, now) or state_answer(q, store, now) or \
+        llm_answer(q, store, llm=llm, now=now, searcher=_Top(searcher, QA_SEARCH_LINES) if searcher else None)
+    if q != question:
+        r["read_as"] = q
+    return r

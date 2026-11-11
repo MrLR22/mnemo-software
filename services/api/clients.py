@@ -25,6 +25,23 @@ class RemoteDescriber:
         """timeout: give up after this many seconds (live mode: the time left before the lag limit)."""
         return self._post("/describe", {"frames": encode_frames(frames_bgr), "seconds": seconds, "check": check}, timeout)
 
+    batch: bool | None = None                    # None: not known yet whether the service has /describe_batch
+
+    def describe_batch(self, items: list[tuple[list[np.ndarray], float, list[str] | None]],
+                       timeout: float | None = None) -> list[str] | None:
+        """Several windows in one call (one generation pass on the GPU). None if the service is an older version
+        without the batch endpoint: the caller then describes the windows one by one."""
+        if self.batch is False:
+            return None
+        body = {"items": [{"frames": encode_frames(f), "seconds": s, "check": c} for f, s, c in items]}
+        r = requests.post(self.url + "/describe_batch", json=body, headers=self.headers, timeout=timeout or self.timeout)
+        if r.status_code in (404, 405):
+            self.batch = False
+            return None
+        r.raise_for_status()
+        self.batch = True
+        return r.json()["texts"]
+
     def chat(self, prompt: str, max_new_tokens: int = 300) -> str:
         return self._post("/chat", {"prompt": prompt, "max_new_tokens": max_new_tokens}, timeout=60)  # a person is waiting
 

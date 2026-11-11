@@ -8,7 +8,7 @@ export interface Turn {
   key: string;
   question: string;
   note?: string;
-  result?: Pick<AskResult, "answer" | "kind" | "moment" | "evidence" | "latency_ms" | "degraded">;
+  result?: Pick<AskResult, "answer" | "kind" | "moment" | "evidence" | "latency_ms" | "degraded" | "read_as">;
   error?: string;
 }
 
@@ -46,6 +46,7 @@ export function Conversation({ turns, onAsk, busy, placeholder, suggestions = []
           <article key={t.key} className="turn">
             <p className="turn-q">{t.question}</p>
             {t.note && <p className="turn-note">{t.note}</p>}
+            {t.result?.read_as && <p className="turn-note">Read as “{t.result.read_as}”</p>}
             {t.error && <p className="turn-error">{t.error}</p>}
             {!t.result && !t.error && <p className="turn-wait"><span />Searching the diary</p>}
             {t.result && (

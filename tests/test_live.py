@@ -113,3 +113,56 @@ def test_a_stuck_call_is_cancelled_at_the_lag_limit(tmp_path):
     s, sm = _run(tmp_path, StuckDescriber(), started_at=datetime.now() - timedelta(seconds=4), n=1, max_lag_s=3.0)
     assert sm["skipped_lag"] == 1 and sm["described"] == 0 and sm["errors"] == []
     assert time.time() - t0 < 10                                         # cancelled at the limit, not after 30 s
+
+
+class OneByOne:
+    """The answer depends on what the frames show, so batched and one-by-one runs can be compared.
+    Each call takes a little time, like the real service, so windows queue up behind it."""
+
+    def __init__(self):
+        self.calls, self.batches = 0, 0
+
+    def _text(self, frames):
+        return f"PLACE: room\nDID: picks up | thing{int(frames[0].mean()) // 10} | -"
+
+    def describe(self, frames, seconds, check=None):
+        self.calls += 1
+        time.sleep(0.3)
+        return self._text(frames)
+
+    def chat(self, prompt, max_new_tokens=300):
+        return "1"
+
+
+class Batched(OneByOne):
+    def describe_batch(self, items):
+        self.batches += 1
+        time.sleep(0.35)                                  # a batch costs about one call
+        return [self._text(f) for f, _, _ in items]
+
+
+def _distinct_piece(path, level, seconds=4, fps=10):
+    w = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"MJPG"), fps, (160, 120))
+    for _ in range(seconds * fps):
+        w.write(np.full((120, 160, 3), level, np.uint8))
+    w.release()
+    return path
+
+
+def test_batched_windows_give_the_same_diary(tmp_path):
+    from services.api.stream import StreamSession
+    from modules.storage import EventStore
+    diaries = {}
+    for batch in (1, 4):
+        d = Batched() if batch > 1 else OneByOne()
+        db = tmp_path / f"b{batch}.db"
+        s = StreamSession("t", str(db), d, FakeTrigger(), None, threshold=0.6, max_lag_s=10 ** 9,
+                          started_at=datetime(2026, 11, 16, 9, 0), batch=batch)
+        for i in range(8):
+            s.add_piece(_distinct_piece(str(tmp_path / f"p{batch}_{i}.avi"), 20 + 25 * i), 4.0 * i)
+        s.stop()
+        assert s.done.wait(60) and s.summary()["errors"] == []
+        diaries[batch] = [(r["ts_start"], r["verb"], r["object"]) for r in EventStore(str(db)).activities() if r["verb"]]
+        if batch > 1:
+            assert d.batches >= 1 and d.calls < 4                       # windows really went in batches
+    assert diaries[1] and diaries[1] == diaries[4]

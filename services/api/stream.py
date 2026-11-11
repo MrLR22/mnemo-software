@@ -38,8 +38,12 @@ class _Deadline:
 
     def __init__(self, describer):
         self.d, self.deadline = describer, None
+        self.k: int | None = None                         # the window being described
+        self.prefetched: dict[int, str] = {}              # answers that came in a batch, by window
 
     def describe(self, frames, seconds, check=None):
+        if self.k is not None and self.k in self.prefetched:
+            return self.prefetched.pop(self.k)
         left = None if self.deadline is None else self.deadline - time.time()
         if left is not None and left <= 1.0:
             raise TimeoutError("no time left before the lag limit")
@@ -48,18 +52,24 @@ class _Deadline:
         except TypeError:                                # a describer without a timeout (tests, in-process model)
             return self.d.describe(frames, seconds, check=check) if check else self.d.describe(frames, seconds)
 
+    def describe_batch(self, items):
+        return self.d.describe_batch(items) if hasattr(self.d, "describe_batch") else None
+
     def chat(self, prompt, max_new_tokens=300):
         return self.d.chat(prompt, max_new_tokens)
+
+
 W = C.VLM_WINDOW_S
 FPS = C.VLM_FRAMES / C.VLM_WINDOW_S                      # frames per second the big model needs (2)
 
 
 class StreamSession:
     def __init__(self, sid: str, db: str, describer, trigger=None, embedder=None, threshold: float = C.GATE_THRESHOLD,
-                 max_lag_s: float = MAX_LAG_S, started_at: datetime | None = None):
+                 max_lag_s: float = MAX_LAG_S, started_at: datetime | None = None, batch: int = 1):
         self.sid, self.db, self.trigger, self.embedder = sid, db, trigger, embedder
         self.describer = _Deadline(describer)
         self.threshold, self.max_lag_s = threshold, max_lag_s
+        self.batch = max(1, batch)                        # recorded videos: describe up to this many windows per call
         self.started = started_at or datetime.now()
         self.heartbeat = max(1, round(C.GATE_HEARTBEAT_S / W))
         self.pieces: "queue.Queue[tuple[str, float] | None]" = queue.Queue()
@@ -139,8 +149,9 @@ class StreamSession:
         logger = ActionLogger(self.describer, store, embedder=self.embedder)
         logger.windows = []
         since, call = self.heartbeat, []
+        pending: collections.deque = collections.deque()  # windows taken from the queue early, for a batch
         while True:
-            w = self.windows.get()
+            w = pending.popleft() if pending else self.windows.get()
             if w is None:
                 break
             k, frames = w["k"], w["frames"]
@@ -156,6 +167,9 @@ class StreamSession:
             call.append(go)
             self.stats["windows"] += 1
             if len(frames) >= 2:
+                if go and self.batch > 1 and k not in self.describer.prefetched:
+                    self._prefetch(w, pending, logger)
+                self.describer.k = k
                 self.describer.deadline = end.timestamp() + self.max_lag_s
                 try:
                     n_rows = len(self.rows)
@@ -189,6 +203,34 @@ class StreamSession:
                 since += 1
                 self.stats["skipped_lag" if late else "skipped_no_action"] += 1
         self.done.set()
+
+    def _prefetch(self, w: dict, pending: collections.deque, logger):
+        """Describe this window and the next flagged ones that are already waiting in ONE call. Each window still
+        gets the objects to check (open fridge, ...) known when the batch is sent; later windows of a batch cannot
+        know a change found in an earlier one of the same batch."""
+        while len(pending) < 2 * self.batch and (not pending or pending[-1] is not None):
+            try:
+                pending.append(self.windows.get_nowait())
+            except queue.Empty:
+                break
+        group = [w] + [x for x in pending if x is not None and x["score"] >= self.threshold
+                       and len(x["frames"]) >= 2][: self.batch - 1]
+        if len(group) < 2:
+            return
+        items = []
+        for x in group:
+            fr = x["frames"]
+            seconds = fr[-1].t - fr[0].t + logger.window_s / logger.frames
+            check = logger.tracker.to_check(fr[0].ts) if logger.track_states else []
+            items.append(([f.image for f in fr], seconds, check or None))
+        try:
+            texts = self.describer.describe_batch(items)
+        except Exception as e:                            # the windows are then described one by one
+            self.stats["errors"].append(f"batch at window {w['k']}: {type(e).__name__}: {e}"[:200])
+            return
+        for x, text in zip(group, texts or []):
+            self.describer.prefetched[x["k"]] = text
+        self.stats["batches"] = self.stats.get("batches", 0) + (1 if texts else 0)
 
     def summary(self) -> dict:
         s = dict(self.stats)
