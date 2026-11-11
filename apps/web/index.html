@@ -1,84 +1,18 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ENGRAM</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <header>
-    <h1>ENGRAM</h1>
-    <p class="sub">Your reference diary. No video is kept.</p>
-    <p id="health" class="health">checking services…</p>
-  </header>
-
-  <main>
-    <section class="card">
-      <h2>Demo replay</h2>
-      <p class="hint">A recorded first-person video, processed in advance by ENGRAM. While it plays, the diary and alerts
-        appear at the moment they happen, and questions are answered as of that moment. (Live recording is in development.)</p>
-      <div class="row">
-        <select id="clips"><option value="">No processed video yet: add one below (step 1)</option></select>
-        <label class="button small">Choose the same video file<input id="replayfile" type="file" accept="video/*" hidden></label>
-      </div>
-      <p id="replaystat" class="status"></p>
-      <div id="procbar" class="procbar" hidden><div id="procfill"></div></div>
-      <video id="player" class="player" controls playsinline hidden></video>
-      <div class="grid" id="replayview" hidden>
-        <div>
-          <h3>Alerts now</h3>
-          <ul id="ralerts" class="list"><li class="empty">Nothing left open.</li></ul>
-          <h3 id="askhead">Ask about the processed part</h3>
-          <form id="rask"><input id="rq" type="text" placeholder="Did I close the door?" autocomplete="off" required><button type="submit">Ask</button></form>
-          <div id="ranswer" class="answer" hidden></div>
-        </div>
-        <div>
-          <h3>Diary so far <span id="rcount" class="empty"></span></h3>
-          <ul id="rdiary" class="list"><li class="empty">Press play.</li></ul>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>Live <span class="empty">(in development)</span></h2>
-      <p class="hint">Wear the phone on your chest, camera facing out. The diary is written while you record.</p>
-      <video id="preview" class="preview" muted playsinline hidden></video>
-      <button id="live">Start live</button>
-      <p id="livestat" class="status"></p>
-      <ul id="liverecent" class="list"></ul>
-    </section>
-
-    <section class="card">
-      <h2>1. Add a clip</h2>
-      <p class="hint">On a phone: tap the button and record with the camera on your chest. On a laptop: pick a video file.</p>
-      <label class="button">
-        Record / choose video
-        <input id="file" type="file" accept="video/*" capture="environment" hidden>
-      </label>
-      <p id="job" class="status"></p>
-    </section>
-
-    <section class="card">
-      <h2>2. Alerts</h2>
-      <ul id="alerts" class="list"><li class="empty">Nothing left open.</li></ul>
-    </section>
-
-    <section class="card">
-      <h2>3. Ask</h2>
-      <form id="ask">
-        <input id="question" type="text" placeholder="Did I close the fridge?" autocomplete="off" required>
-        <button type="submit">Ask</button>
-      </form>
-      <div id="answer" class="answer" hidden></div>
-    </section>
-
-    <section class="card">
-      <h2>Today's diary <button id="refresh" class="small">refresh</button></h2>
-      <ul id="diary" class="list"><li class="empty">No entries yet.</li></ul>
-      <button id="delete" class="danger small">Delete my whole diary</button>
-    </section>
-  </main>
-  <script src="/static/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Mnemo: ask questions about what you did, from first-person video." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Mnemo</title>
+    <script>
+      try { document.documentElement.dataset.theme = localStorage.getItem("mnemo_theme") || "dark"; }
+      catch (e) { document.documentElement.dataset.theme = "dark"; }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

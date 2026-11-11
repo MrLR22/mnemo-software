@@ -7,3 +7,5 @@ uploads/
 *.mp4
 *.mov
 bin/
+node_modules/
+apps/web/dist/

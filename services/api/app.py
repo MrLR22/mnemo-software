@@ -97,6 +97,7 @@ async def app_token(request, call_next):
     return await call_next(request)
 _parts: dict = {}
 _lock = threading.Lock()                         # the shared connection: one request at a time
+_models_lock = threading.Lock()
 jobs: dict[str, dict] = {}
 _queue: "queue.Queue[tuple[str, str, datetime | None]]" = queue.Queue()
 
@@ -138,10 +139,11 @@ def search_models():
     """(text, clip) for hybrid search, loaded once; (None, None) with ENGRAM_SEARCH=keyword."""
     if os.environ.get("ENGRAM_SEARCH", "hybrid") != "hybrid":
         return None, None
-    if "text" not in _parts:
-        from modules.landmarks import ClipEmbedder
-        from modules.text_embed import TextEmbedder
-        _parts["text"], _parts["clip"] = TextEmbedder(), ClipEmbedder()
+    with _models_lock:                               # loaded in the background at startup; a question waits for it
+        if "text" not in _parts:
+            from modules.landmarks import ClipEmbedder
+            from modules.text_embed import TextEmbedder
+            _parts["text"], _parts["clip"] = TextEmbedder(), ClipEmbedder()
     return _parts["text"], _parts["clip"]
 
 
@@ -217,13 +219,24 @@ def _row(r: dict) -> dict:
             "source": r.get("source"), "line": fmt_row(r)}
 
 
+def _states(r: dict) -> list[dict]:
+    """The object state this diary line sets (open / closed / on / off), if any."""
+    return [{"object": o.removesuffix(" power"), "state": s} for o, (s, _) in object_states([r]).items()]
+
+
 @app.get("/api/diary")
 def diary(day: str | None = None):
     d = datetime.fromisoformat(day) if day else datetime.now()
     d0 = d.replace(hour=0, minute=0, second=0, microsecond=0)
     with reading() as db:
         rows = db.activities(d0, d0 + timedelta(days=1))
-    return {"day": d0.date().isoformat(), "rows": [_row(r) for r in rows if r.get("verb")]}
+    out = []
+    for r in rows:
+        if r.get("verb"):
+            d = _row(r)
+            d["state"] = _states(r)
+            out.append(d)
+    return {"day": d0.date().isoformat(), "rows": out}
 
 
 @app.get("/api/days")
@@ -261,7 +274,8 @@ def ask(req: AskIn):
             m = _try(lambda: s.moment(req.question, start, end, llm=llm))
             if m:
                 moment = {"start": m["ts_start"].isoformat(timespec="seconds"), "end": m["ts_end"].isoformat(timespec="seconds"),
-                          "what": "not described; the camera image matches" if m["row"].get("image_only") else fmt_row(m["row"]).split(" | ", 1)[1]}
+                          "what": "not described; the camera image matches" if m["row"].get("image_only")
+                          else " ".join(x for x in (m["row"].get("verb"), m["row"].get("object")) if x)}
     evidence = [_row(x) for x in r["lines"][:5]]
     ms = int((time.perf_counter() - t0) * 1000)
     try:
@@ -311,10 +325,9 @@ def clip_diary(clip_id: str):
     for r in rows:
         if not r.get("verb"):
             continue
-        st = object_states([r])
         d = _row(r)
         d["offset_s"] = round((r["ts_start"] - start).total_seconds(), 1)
-        d["state"] = [{"object": o.removesuffix(" power"), "state": s_} for o, (s_, _) in st.items()]
+        d["state"] = _states(r)
         out.append(d)
     return {"clip": c, "rows": out}
 

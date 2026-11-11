@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the laptop parts: small model service (:8001) and backend + web app (:8000).
+# Start the laptop parts: small model service (:8001) and backend + web app (:8000). The database is PostgreSQL.
 # The big model service runs elsewhere (Kaggle: services/vlm/kaggle_vlm_service.ipynb) and is set in .env.
 #   ./scripts/run_local.sh            then open http://localhost:8000 (phone: http://<laptop IP>:8000, same Wi-Fi)
 #   FAKE=1 ./scripts/run_local.sh     also starts a fake big model on :8002 (try the apps without Kaggle)
@@ -11,6 +11,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f .env ] && { set -a; . ./.env; set +a; }
 PY="${PYTHON:-$(cd ../mnemo && pwd)/.mnemovenv/bin/python}"     # absolute path: no venv warnings
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"                    # search models are on disk: never wait for the network
+# the database: a separate server, started by the system (sudo systemctl start postgresql)
+if [ -n "${ENGRAM_DB_URL:-}" ] && ! psql "$ENGRAM_DB_URL" -qtAc "select 1" >/dev/null 2>&1; then
+  echo "PostgreSQL is not reachable at $ENGRAM_DB_URL. Start it with: sudo systemctl start postgresql"; exit 1
+fi
+# the web app: built once, rebuilt when its source changes
+if [ ! -f apps/web/dist/index.html ] || [ -n "$(find apps/web/src apps/web/index.html -newer apps/web/dist/index.html -print -quit)" ]; then
+  echo "building the web app…"; (cd apps/web && { [ -d node_modules ] || npm install --no-fund --no-audit; } && npm run build --silent >/dev/null)
+fi
 pids=()
 trap 'kill "${pids[@]}" 2>/dev/null' EXIT
 if [ "${FAKE:-0}" = "1" ]; then
@@ -19,7 +28,7 @@ if [ "${FAKE:-0}" = "1" ]; then
 fi
 # live mode on a laptop CPU: 320-px object detection (1.8 s per 4-s piece instead of 3.3 s, measured)
 ENGRAM_YOLO_IMGSZ="${ENGRAM_YOLO_IMGSZ:-320}" "$PY" -m uvicorn services.trigger.app:app --port 8001 --log-level warning & pids+=($!)
-IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}' || true)
 SSL=()
 if [ "${HTTPS:-0}" = "1" ] || [ "${TUNNEL:-0}" = "1" ]; then
   export ENGRAM_APP_TOKEN="${ENGRAM_APP_TOKEN:-$("$PY" -c 'import secrets; print(secrets.token_urlsafe(18))')}"
@@ -52,5 +61,5 @@ if [ "${TUNNEL:-0}" = "1" ]; then
     fi ) &
 fi
 SCHEME=http; [ "${HTTPS:-0}" = "1" ] && SCHEME=https
-echo "ENGRAM: laptop ${SCHEME}://localhost:8000 | big model: ${ENGRAM_VLM_URL:-NOT SET}"
+echo "Mnemo: ${SCHEME}://localhost:8000 | database: ${ENGRAM_DB_URL:-SQLite file} | big model: ${ENGRAM_VLM_URL:-NOT SET}"
 "$PY" -m uvicorn services.api.app:app --host 0.0.0.0 --port 8000 --log-level warning "${SSL[@]}"

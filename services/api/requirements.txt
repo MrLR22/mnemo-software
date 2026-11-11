@@ -7,3 +7,4 @@ numpy
 opencv-contrib-python==5.0.0.93
 open_clip_torch==3.3.0          # image fingerprints for search
 sentence-transformers==5.1.1    # meaning search
+psycopg[binary]>=3.2            # the database (PostgreSQL)

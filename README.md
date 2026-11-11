@@ -1,4 +1,4 @@
-# ENGRAM software
+# Mnemo software
 
 A chest camera that keeps a **reference diary** of what you did, and answers *"Did I close the fridge?"* with the
 time, from the diary only. No video is kept. This folder is the software; the research (training, experiments,
@@ -7,25 +7,24 @@ evaluations) is in `../mnemo`.
 ## Parts
 
 ```
- ① phone (apps/mobile)   ② web app (apps/web)          frontends: send clips, show the diary, ask
-          └──────────────┬──────────────┘
-                         ▼  HTTP
-              ③ backend (services/api)                 receives clips, runs the pipeline, answers
+                ① web app (apps/web)                   React frontend: recordings, timeline, ask, objects, diary, system
+                         │  REST
+                         ▼
+              ② backend (services/api)                 receives videos, runs the pipeline, answers
           ┌──────────────┼───────────────────┐
-          ▼              ▼                   ▼
- ④ small model      ⑤ big model         ⑥ database (database/)
- services/trigger   services/vlm        diary + search vectors, SQLite
- OUR HOI-TCN, CPU   Qwen3-VL, GPU
+          ▼ SQL          ▼ video             ▼ frames
+ ③ database         ④ small model       ⑤ big model
+ PostgreSQL         services/trigger    services/vlm
+ database/          OUR HOI-TCN, CPU    Qwen3-VL, GPU
 ```
 
 | Part | Folder | Runs on | Swap it by |
 |---|---|---|---|
-| ① Mobile app | `apps/mobile` | phone browser (now) | a native app using the same API |
-| ② Web app | `apps/web` | any browser | any frontend using the same API |
-| ③ Backend | `services/api` | laptop / server | — |
+| ① Web app | `apps/web` | any browser | any frontend using the same API |
+| ② Backend | `services/api` | laptop / server | — |
+| ③ Database | `database/`, `services/db` | PostgreSQL server | `ENGRAM_DB_URL=<url>` |
 | ④ Small model (ours) | `services/trigger`, `models/hoi_tcn.pt` | CPU | `ENGRAM_TRIGGER_MODEL=<checkpoint>` |
 | ⑤ Big model | `services/vlm` | GPU (Kaggle while testing) | `ENGRAM_VLM_MODEL=<model id>` or another service with the same 3 endpoints |
-| ⑥ Database | `database/` | next to the backend | `ENGRAM_DB=<file>` |
 
 The parts only talk over HTTP. The model wrappers, diary and search code come from `../mnemo` (`MNEMO_PATH`).
 
@@ -33,23 +32,27 @@ The parts only talk over HTTP. The model wrappers, diary and search code come fr
 
 1. **Big model on Kaggle:** import `services/vlm/kaggle_vlm_service.ipynb`, GPU T4 + Internet on, **Run All**,
    keep the tab open. Its last cell prints `ENGRAM_VLM_URL=...` and `ENGRAM_VLM_TOKEN=...`.
-2. **On the laptop:** `cp .env.example .env`, paste those two lines, then `./scripts/run_local.sh`.
-3. Open **http://localhost:8000**, or on the phone (same Wi-Fi) the address the script prints.
+2. **On the laptop:** set up PostgreSQL once (`database/README.md`), `cp .env.example .env`, paste those two lines, then
+   `./scripts/run_local.sh` (it builds the web app the first time).
+3. Open **http://localhost:8000**.
+
+Working on the web app: `cd apps/web && npm run dev` (http://localhost:5173, API calls go to the backend on :8000).
 
 Without Kaggle: `FAKE=1 ./scripts/run_local.sh` (a fake big model, to try the apps).
 
 ## Demo replay (recorded video, any length)
 
-Add a recorded first-person video in step 1. It is processed **piece by piece** (20-s pieces, the same chain as live
+Add a first-person video under **Recordings**. It is processed **piece by piece** (20-s pieces, the same chain as live
 mode, `services/api/progressive.py`) without any lag limit (every window the small model flags is described), then
-deleted from the backend. It is listed under **Demo replay** at once: while it is still processing, the app shows
-"processed up to mm:ss" and questions are answered about the processed part. Under **Demo replay**, pick it and choose the same file on the
-device: while it plays, diary lines and alerts appear at the moment they happen in the video, and questions are
-answered as of that moment (`/api/clips`, `/api/clips/{id}/diary`, `/api/ask` with `at`).
+deleted from the backend. It opens at once: while it is still processing, the timeline shows how far the analysis has
+reached and questions are answered about that part. The file stays in this browser (IndexedDB) so it can be played:
+while it plays, diary lines and open objects appear at the moment they happen, and questions are answered as of that
+moment (`/api/clips`, `/api/clips/{id}/diary`, `/api/ask` with `at`). If the big model is offline, counts and
+open/closed answers still work, and other questions fall back to the matching diary lines.
 
-## Live mode (lag ≤ 45 s, never above 60 s; in development)
+## Live mode (future work: backend only for now; lag ≤ 45 s, never above 60 s)
 
-The web app's **Start live** button records a new 4-second piece every 4 seconds and sends each one at once; the
+The earlier web page's **Start live** button recorded a new 4-second piece every 4 seconds and sends each one at once; the
 diary is written while you record (`services/api/stream.py`).
 
 - **Small model** keeps its state across pieces (`services/trigger/session.py`); hands and objects run in parallel.
@@ -81,7 +84,14 @@ token (it opens your diary: keep it private). Without it, the phone can still up
 | GET | `/api/alerts` | objects last seen open / on |
 | DELETE | `/api/diary` | delete the whole diary |
 | GET | `/api/health` | which parts are reachable |
+| GET | `/api/overview` | numbers for the home screen |
+| GET | `/api/objects` | every object: last action, location, open/closed state |
+| GET | `/api/days` | days with diary lines |
+| GET | `/api/questions` | questions asked, with answers and evidence |
+| GET | `/api/system` | status of every part, database tables and sizes |
+| GET | `/api/system/tables/{name}` | newest rows of one table (read-only) |
 | GET | `/api/clips` | processed recordings (name, start, length, windows described) |
+| DELETE | `/api/clips/{id}` | forget one recording, its diary lines and its vectors |
 | GET | `/api/clips/{id}/diary` | a recording's diary, each line with `offset_s` (seconds into the video) |
 | POST | `/api/live/start` | start a live session → session id |
 | POST | `/api/live/{sid}/piece` | one piece (`file`, `offset` = seconds since start) |
